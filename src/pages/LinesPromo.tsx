@@ -1,6 +1,8 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import {
   BarChart,
+  Button,
   Callout,
   Checks,
   Field,
@@ -35,10 +37,32 @@ import {
   type Mechs,
   type SimParams,
 } from "../lib/lines";
+import { advise } from "../lib/advisor";
+import { loadScenario, savedAtLabel, type StoredScenario } from "../lib/scenario";
 
 function num(s: string, fallback: number) {
-  const n = Number(String(s).replace(",", "."));
+  // Puste pole to "nie podałem", a nie "zero" — Number("") daje 0 i cicho
+  // wywracało marżę na minus przy czyszczeniu ceny.
+  const t = String(s).replace(",", ".").trim();
+  if (t === "") return fallback;
+  const n = Number(t);
   return Number.isFinite(n) && n >= 0 ? n : fallback;
+}
+
+/**
+ * Wartość zmierzona przez Doradcę rzadko trafia w gotową opcję listy.
+ * Zamiast ją zaokrąglać, dokładamy ją jako osobną pozycję — widać wtedy,
+ * że to pomiar, a nie jedno z trzech pasm modelowych.
+ */
+function withMeasured(
+  base: { value: string; label: string }[],
+  value: number | null,
+  format: (v: number) => string,
+) {
+  if (value === null || !Number.isFinite(value)) return base;
+  const key = String(value);
+  if (base.some((o) => o.value === key)) return base;
+  return [{ value: key, label: `${format(value)} — z Doradcy` }, ...base];
 }
 
 function fmtN(n: number) {
@@ -119,6 +143,32 @@ export function LinesPromoPage() {
     pycha: true,
     flirt: true,
   });
+  const [scenario, setScenario] = useState<StoredScenario | null>(null);
+  const [applied, setApplied] = useState(false);
+  useEffect(() => setScenario(loadScenario()), []);
+  const advice = useMemo(() => (scenario ? advise(scenario.situation) : null), [scenario]);
+
+  const applyScenario = () => {
+    if (!advice) return;
+    const byId = Object.fromEntries(advice.lines.map((l) => [l.id, l])) as Record<LineId, (typeof advice.lines)[0]>;
+    setPEuforia(String(byId.euforia.price));
+    setPRetro(String(byId.retro.price));
+    setPPycha(String(byId.pycha.price));
+    setPFlirt(String(byId.flirt.price));
+    setCEuforia(String(byId.euforia.cogs));
+    setCRetro(String(byId.retro.cogs));
+    setCPycha(String(byId.pycha.cogs));
+    setCFlirt(String(byId.flirt.cogs));
+    setSeason(String(advice.params.season));
+    setCannibal(String(advice.params.cannibal));
+    setFatigue(String(advice.params.fatigue));
+    setPantry(String(advice.params.pantry));
+    setCapMode(advice.params.capMode);
+    if (advice.params.capMode === "liters") setLiterCap(String(advice.params.cap));
+    else setCartonCap(String(advice.params.cap));
+    setInPlan(scenario!.situation.inPlan);
+    setApplied(true);
+  };
 
   const price: Record<LineId, number> = {
     euforia: num(pEuforia, 20),
@@ -176,7 +226,10 @@ export function LinesPromoPage() {
     capMode === "liters" ? r.liters >= cap - 1 : r.cartons >= cap - 0.5,
   );
 
-  const impactRows = useMemo(() => {
+  // Odczyt bieżących gałek. Świadomie bez useMemo: zależałby od obiektów
+  // tworzonych na nowo w każdym renderze, więc nigdy by nie trafiał, a udawałby
+  // optymalizację. Liczenie kilku napisów jest tańsze niż porównanie zależności.
+  const impactRows: string[][] = (() => {
     const out: string[][] = [
       [
         "Sezon",
@@ -246,24 +299,7 @@ export function LinesPromoPage() {
       ]);
     }
     return out;
-  }, [
-    params,
-    mechs,
-    ladderBroken,
-    euEff,
-    flRegular,
-    pyRegular,
-    longBurst,
-    burstN,
-    hitCap,
-    cap,
-    capMode,
-    cogsAbovePrice,
-    g22Pycha,
-    re,
-    py,
-    offNames,
-  ]);
+  })();
 
   return (
     <div className="stack">
@@ -274,6 +310,30 @@ export function LinesPromoPage() {
           zmęczenie akcji, dołek po gazetce i limit łańcucha.
         </p>
       </div>
+
+      {scenario && advice ? (
+        <Callout tone={applied ? "ok" : "info"} title={`Scenariusz z Doradcy (zapisany ${savedAtLabel(scenario.savedAt)})`}>
+          {applied ? (
+            <>
+              Ceny, koszty i parametry rynku na tej stronie pochodzą z Twoich danych —{" "}
+              {advice.confidence.measured} z {advice.confidence.total} odczytów jest zmierzonych, pewność{" "}
+              {advice.confidence.level}. <Link to="/doradca">Zmień je w Doradcy</Link>.
+            </>
+          ) : (
+            <>
+              Strona liczy na wartościach modelowych, a masz zapisany scenariusz. Wczytaj go, żeby presety
+              i optymalizator pokazywały te same liczby o tej samej firmie.{" "}
+              <Button onClick={applyScenario}>Wczytaj scenariusz</Button>
+            </>
+          )}
+        </Callout>
+      ) : (
+        <Callout tone="warn" title="Liczysz na wartościach modelowych">
+          Ceny, koszty i reakcja rynku są syntetyczne. <Link to="/doradca">Przejdź do Doradcy</Link>, żeby
+          podstawić swoje liczby, albo <Link to="/plan">do optymalizatora</Link>, żeby zamiast sześciu
+          presetów poszukać kalendarza.
+        </Callout>
+      )}
 
       <h2>Linie w planie</h2>
       <p className="small">
@@ -401,33 +461,45 @@ export function LinesPromoPage() {
           <Select
             value={cannibal}
             onChange={setCannibal}
-            options={[
-              { value: "0.2", label: "Niska" },
-              { value: "0.4", label: "Średnia" },
-              { value: "0.65", label: "Wysoka" },
-            ]}
+            options={withMeasured(
+              [
+                { value: "0.2", label: "Niska" },
+                { value: "0.4", label: "Średnia" },
+                { value: "0.65", label: "Wysoka" },
+              ],
+              applied ? (advice?.params.cannibal ?? null) : null,
+              (v) => v.toFixed(3).replace(".", ","),
+            )}
           />
         </Field>
         <Field label="Zmęczenie fali">
           <Select
             value={fatigue}
             onChange={setFatigue}
-            options={[
-              { value: "0.06", label: "Słabe" },
-              { value: "0.14", label: "Normalne" },
-              { value: "0.25", label: "Ostre" },
-            ]}
+            options={withMeasured(
+              [
+                { value: "0.06", label: "Słabe" },
+                { value: "0.14", label: "Normalne" },
+                { value: "0.25", label: "Ostre" },
+              ],
+              applied ? (advice?.params.fatigue ?? null) : null,
+              (v) => v.toFixed(3).replace(".", ","),
+            )}
           />
         </Field>
         <Field label="Dołek po promo">
           <Select
             value={pantry}
             onChange={setPantry}
-            options={[
-              { value: "0.05", label: "Płytki" },
-              { value: "0.12", label: "Normalny" },
-              { value: "0.22", label: "Głęboki" },
-            ]}
+            options={withMeasured(
+              [
+                { value: "0.05", label: "Płytki" },
+                { value: "0.12", label: "Normalny" },
+                { value: "0.22", label: "Głęboki" },
+              ],
+              applied ? (advice?.params.pantry ?? null) : null,
+              (v) => v.toFixed(3).replace(".", ","),
+            )}
           />
         </Field>
         <Field label="Elastyczność">
@@ -453,11 +525,27 @@ export function LinesPromoPage() {
         </Field>
         {capMode === "liters" ? (
           <Field label="Limit L / tydzień">
-            <Select value={literCap} onChange={setLiterCap} options={LITER_CAP_OPTIONS} />
+            <Select
+              value={literCap}
+              onChange={setLiterCap}
+              options={withMeasured(
+                LITER_CAP_OPTIONS,
+                applied && advice?.params.capMode === "liters" ? advice.params.cap : null,
+                (v) => `${fmtN(v)} L`,
+              )}
+            />
           </Field>
         ) : (
           <Field label="Limit kartonów / tydzień">
-            <Select value={cartonCap} onChange={setCartonCap} options={CARTON_CAP_OPTIONS} />
+            <Select
+              value={cartonCap}
+              onChange={setCartonCap}
+              options={withMeasured(
+                CARTON_CAP_OPTIONS,
+                applied && advice?.params.capMode === "cartons" ? advice.params.cap : null,
+                (v) => `${fmtN(v)} kartonów`,
+              )}
+            />
           </Field>
         )}
       </div>
