@@ -198,6 +198,18 @@ w przeglądarce i pokazać obok wyniku EA.
 
 Wszystkie trzy mają ziarno losowe w interfejsie — ten sam numer odtwarza ten sam przebieg.
 
+## Plan na przyszłość: LLM do wprowadzania danych
+
+`docs/plan-llm.md` opisuje, jak dopiąć model językowy (Gemini 3.5 Flash-Lite) do trzech rzeczy:
+wypełniania Doradcy z dokumentów, prowadzenia badań nad skutecznością briefów i podsumowywania
+wyników. Kod jeszcze nie istnieje — dokument ustala granicę, poza którą model nie wchodzi:
+
+> LLM obsługuje język i sytuację. Kod obsługuje arytmetykę i przeszukiwanie.
+
+Model nie produkuje żadnej liczby trafiającej do symulacji, nie generuje kalendarza promo
+i nie podaje w podsumowaniu liczby, której nie zwróciło narzędzie. Warstwa jest w pełni
+opcjonalna — narzędzie ma dalej działać w przeglądarce bez sieci.
+
 ## Czego tu nie ma — i co by się zmieniło
 
 | Zamiast | Kiedy warto | Co innego zobaczysz |
