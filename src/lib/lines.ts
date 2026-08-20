@@ -118,6 +118,10 @@ function neighbors(id: LineId): LineId[] {
   return ["pycha", "retro"];
 }
 
+export function filterCalendar(weeks: LineId[][], enabled: Record<LineId, boolean>): LineId[][] {
+  return weeks.map((w) => w.filter((id) => enabled[id]));
+}
+
 export function buildCalendar(strategy: string, burst: number): LineId[][] {
   const weeks: LineId[][] = Array.from({ length: 12 }, () => []);
   const put = (start: number, len: number, ids: LineId[]) => {
@@ -268,10 +272,10 @@ export function onLabel(on: LineId[]): string {
 }
 
 export const PRESETS = [
-  { id: "protect", label: "Chroń premium" },
-  { id: "sequential", label: "Rotacja 1 po 1" },
-  { id: "twoFar", label: "Flirt + Euforia naraz" },
-  { id: "twoNear", label: "Retro + Pycha naraz" },
-  { id: "alwaysFlirt", label: "Tylko Flirt 12 tyg." },
-  { id: "allOn", label: "Wszystkie naraz" },
+  { id: "protect", label: "Chroń premium", chart: ["Chroń", "premium"] },
+  { id: "sequential", label: "Rotacja 1 po 1", chart: ["Rotacja", "1 po 1"] },
+  { id: "twoFar", label: "Flirt + Euforia naraz", chart: ["Flirt + Euforia", "naraz"] },
+  { id: "twoNear", label: "Retro + Pycha naraz", chart: ["Retro + Pycha", "naraz"] },
+  { id: "alwaysFlirt", label: "Tylko Flirt 12 tyg.", chart: ["Tylko Flirt", "12 tyg."] },
+  { id: "allOn", label: "Wszystkie naraz", chart: ["Wszystkie", "naraz"] },
 ];

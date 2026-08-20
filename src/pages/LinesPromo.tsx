@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import {
   BarChart,
   Callout,
+  Checks,
   Field,
   LineChart,
   NumberInput,
@@ -15,6 +16,7 @@ import {
 import {
   CARTON,
   CARTON_CAP_OPTIONS,
+  LINES,
   LITER_CAP_OPTIONS,
   MECH_BY_ID,
   MECH_OPTIONS,
@@ -22,6 +24,7 @@ import {
   applyPrices,
   buildCalendar,
   effectiveZlPerLiter,
+  filterCalendar,
   onLabel,
   simulate,
   totals,
@@ -81,6 +84,10 @@ const PARAM_GUIDE: string[][] = [
     "Mechanika",
     "% gdy nie chcesz zapychać mroźni. 1+1 / 2+1 gdy chcesz litry. 2+2 = maksimum 50% w litrach + najgłębsza spiżarnia. Euforii prawie nigdy −50% ani 2+2 — drabina zł/L się wywraca.",
   ],
+  [
+    "Linie w planie",
+    "Odznacz linię, jeśli w tym scenariuszu jej nie ma: znika z gazetki i z wolumenu. Ceny zostają, żeby włączyć ją z powrotem bez przepisywania.",
+  ],
 ];
 
 export function LinesPromoPage() {
@@ -106,6 +113,12 @@ export function LinesPromoPage() {
   const [cRetro, setCRetro] = useState("7.4");
   const [cPycha, setCPycha] = useState("10.2");
   const [cFlirt, setCFlirt] = useState("6.6");
+  const [inPlan, setInPlan] = useState<Record<LineId, boolean>>({
+    euforia: true,
+    retro: true,
+    pycha: true,
+    flirt: true,
+  });
 
   const price: Record<LineId, number> = {
     euforia: num(pEuforia, 20),
@@ -134,12 +147,16 @@ export function LinesPromoPage() {
     cap,
   };
   const burstN = Number(burst);
-  const calendar = buildCalendar(strategy, burstN);
-  const rows = simulate(calendar, mechs, params, live);
+  const activeLive = live.filter((l) => inPlan[l.id]);
+  const offNames = LINES.filter((l) => !inPlan[l.id]).map((l) => l.name);
+  const calendar = filterCalendar(buildCalendar(strategy, burstN), inPlan);
+  const rows = simulate(calendar, mechs, params, activeLive);
   const tot = totals(rows);
   const cmp = PRESETS.map((pr) => ({
-    name: pr.label,
-    tot: totals(simulate(buildCalendar(pr.id, burstN), mechs, params, live)),
+    chart: pr.chart,
+    tot: totals(
+      simulate(filterCalendar(buildCalendar(pr.id, burstN), inPlan), mechs, params, activeLive),
+    ),
   }));
 
   const eu = byId.euforia;
@@ -149,11 +166,12 @@ export function LinesPromoPage() {
   const euEff = effectiveZlPerLiter(eu, MECH_BY_ID[mechs.euforia]);
   const flRegular = zlL(fl);
   const pyRegular = zlL(py);
-  const ladderBroken = euEff < flRegular - 0.05;
+  const ladderBroken = inPlan.euforia && inPlan.flirt && euEff < flRegular - 0.05;
   const longBurst = burstN >= 6;
-  const g22Pycha = mechs.pycha === "g22";
-  const euDeep = MECH_BY_ID[mechs.euforia].depth >= 0.3 || MECH_BY_ID[mechs.euforia].id === "g22";
-  const cogsAbovePrice = live.some((l) => l.cogs > l.price);
+  const g22Pycha = inPlan.pycha && mechs.pycha === "g22";
+  const euDeep =
+    inPlan.euforia && (MECH_BY_ID[mechs.euforia].depth >= 0.3 || MECH_BY_ID[mechs.euforia].id === "g22");
+  const cogsAbovePrice = activeLive.some((l) => l.cogs > l.price);
   const hitCap = rows.some((r) =>
     capMode === "liters" ? r.liters >= cap - 1 : r.cartons >= cap - 0.5,
   );
@@ -221,6 +239,12 @@ export function LinesPromoPage() {
         `4 × 1,35 L = 5,4 L za ${pln(2 * py.price)}. ${effectiveZlPerLiter(py, MECH_BY_ID.g22).toFixed(2)} zł/L.`,
       ]);
     }
+    if (offNames.length) {
+      out.push([
+        "Linie poza planem",
+        `${offNames.join(", ")} — zero sztuk i zero gazetki. Porównanie rotacji też idzie bez nich.`,
+      ]);
+    }
     return out;
   }, [
     params,
@@ -238,6 +262,7 @@ export function LinesPromoPage() {
     g22Pycha,
     re,
     py,
+    offNames,
   ]);
 
   return (
@@ -250,11 +275,31 @@ export function LinesPromoPage() {
         </p>
       </div>
 
+      <h2>Linie w planie</h2>
+      <p className="small">
+        Odznaczoną linię wyjmujesz z gazetki i z liczenia sztuk — jakby jej nie było w tych 12 tygodniach.
+      </p>
+      <Checks
+        items={LINES.map((l) => ({ id: l.id, label: l.name }))}
+        value={inPlan}
+        onToggle={(id) => setInPlan((p) => ({ ...p, [id]: !p[id as LineId] }))}
+      />
+      {offNames.length ? (
+        <Callout tone="warn" title="Poza planem">
+          {offNames.join(", ")} nie wchodzi do marży, litrów ani kalendarza.
+        </Callout>
+      ) : null}
+      {activeLive.length === 0 ? (
+        <Callout tone="bad" title="Brak linii">
+          Włącz choć jedną, inaczej 12 tygodni to same zera.
+        </Callout>
+      ) : null}
+
       {ladderBroken ? (
         <Callout tone="bad" title="Drabina się wywróciła">
           Euforia schodzi do {euEff.toFixed(2)} zł/L. Flirt regularnie stoi na {flRegular.toFixed(0)} zł/L.
         </Callout>
-      ) : strategy === "twoNear" ? (
+      ) : strategy === "twoNear" && inPlan.retro && inPlan.pycha ? (
         <Callout tone="warn" title="Retro i Pycha w tym samym tygodniu">
           To ten sam klient średniej półki. Dwie naklejki kradną sobie wolumen.
         </Callout>
@@ -300,8 +345,9 @@ export function LinesPromoPage() {
       <Table
         headers={["Linia", "Półka", "Opakowanie", "Karton", "Cena", "zł / L", "Wytworzenie"]}
         align={["l", "l", "r", "r", "r", "r", "r"]}
+        tones={live.map((l) => (inPlan[l.id] ? "ok" : "neutral"))}
         rows={live.map((l) => [
-          l.name,
+          inPlan[l.id] ? l.name : `${l.name} (poza planem)`,
           l.shelf,
           `${l.packL.toString().replace(".", ",")} L`,
           `${CARTON[l.id]} szt.`,
@@ -509,7 +555,7 @@ export function LinesPromoPage() {
 
       <h2>Ta sama mechanika, inna rotacja</h2>
       <p className="small">Oś Y: marża 12 tyg. (zł)</p>
-      <BarChart categories={cmp.map((c) => c.name)} values={cmp.map((c) => Math.round(c.tot.margin))} suffix=" zł" />
+      <BarChart categories={cmp.map((c) => c.chart)} values={cmp.map((c) => Math.round(c.tot.margin))} suffix=" zł" />
 
       <h2>Co robią teraz Twoje ustawienia</h2>
       <p className="small">To odczyt bieżących gałek — nie instrukcja, jak je dobierać (ta jest wyżej).</p>

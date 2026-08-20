@@ -51,6 +51,27 @@ export function Field({
   );
 }
 
+export function Checks({
+  items,
+  value,
+  onToggle,
+}: {
+  items: { id: string; label: string }[];
+  value: Record<string, boolean>;
+  onToggle: (id: string) => void;
+}) {
+  return (
+    <div className="checks">
+      {items.map((it) => (
+        <label key={it.id} className={`check${value[it.id] ? " on" : ""}`}>
+          <input type="checkbox" checked={!!value[it.id]} onChange={() => onToggle(it.id)} />
+          {it.label}
+        </label>
+      ))}
+    </div>
+  );
+}
+
 export function NumberInput({
   value,
   onChange,
@@ -225,45 +246,67 @@ export function LineChart({
   );
 }
 
+function wrapCat(s: string): string[] {
+  const words = s.split(" ");
+  if (s.length <= 13 || words.length < 2) return [s];
+  let best = 1;
+  let bestDiff = Infinity;
+  for (let i = 1; i < words.length; i++) {
+    const a = words.slice(0, i).join(" ").length;
+    const b = words.slice(i).join(" ").length;
+    const d = Math.abs(a - b);
+    if (d < bestDiff) {
+      bestDiff = d;
+      best = i;
+    }
+  }
+  return [words.slice(0, best).join(" "), words.slice(best).join(" ")];
+}
+
 export function BarChart({
   categories,
   values,
   suffix = "",
 }: {
-  categories: string[];
+  categories: Array<string | string[]>;
   values: number[];
   suffix?: string;
 }) {
+  const labels = categories.map((c) => (Array.isArray(c) ? c : wrapCat(c)));
+  const linesN = Math.max(1, ...labels.map((l) => l.length));
   const w = 640;
-  const h = 240;
-  const pad = { l: 16, r: 16, t: 16, b: 64 };
+  const pad = { l: 12, r: 12, t: 24, b: 22 + linesN * 16 };
+  const h = 210 + pad.b;
   const max = Math.max(...values, 1);
   const iw = w - pad.l - pad.r;
   const ih = h - pad.t - pad.b;
-  const bw = iw / categories.length - 8;
+  const bw = iw / Math.max(categories.length, 1) - 8;
   return (
     <svg viewBox={`0 0 ${w} ${h}`} className="map" role="img">
       {values.map((v, i) => {
-        const bh = (v / max) * ih;
+        const bh = (Math.max(v, 0) / max) * ih;
         const x = pad.l + i * (iw / categories.length) + 4;
         const y = pad.t + ih - bh;
+        const cx = x + bw / 2;
         return (
-          <g key={categories[i]}>
+          <g key={i}>
             <rect x={x} y={y} width={bw} height={bh} fill="#3dd68c" />
-            <text x={x + bw / 2} y={y - 4} fill="#e8e6e3" fontSize={10} textAnchor="middle">
+            <text x={cx} y={y - 6} fill="#e8e6e3" fontSize={10} textAnchor="middle">
               {Math.round(v)}
               {suffix}
             </text>
-            <text
-              x={x + bw / 2}
-              y={h - 8}
-              fill="#9a9894"
-              fontSize={9}
-              textAnchor="end"
-              transform={`rotate(-28 ${x + bw / 2} ${h - 8})`}
-            >
-              {categories[i]}
-            </text>
+            {labels[i].map((line, li) => (
+              <text
+                key={line + li}
+                x={cx}
+                y={pad.t + ih + 14 + li * 14}
+                fill="#c4c2be"
+                fontSize={11}
+                textAnchor="middle"
+              >
+                {line}
+              </text>
+            ))}
           </g>
         );
       })}

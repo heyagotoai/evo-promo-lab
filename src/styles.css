@@ -51,6 +51,16 @@ select, .field {
 }
 label.lbl { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: #9a9894; }
 
+.checks { display: flex; flex-wrap: wrap; gap: 8px; }
+.check {
+  display: flex; align-items: center; gap: 8px;
+  border: 1px solid #3a3a3a; background: #1e1e1e; color: #9a9894;
+  border-radius: 6px; padding: 8px 12px; font-size: 13px; cursor: pointer;
+  user-select: none;
+}
+.check.on { color: #e8e6e3; border-color: #3dd68c; background: #16241c; }
+.check input { accent-color: #3dd68c; width: 16px; height: 16px; margin: 0; }
+
 .stat {
   min-width: 140px; padding: 8px 0;
 }
@@ -87,5 +97,5 @@ td.r, th.r { text-align: right; }
   border: 1px solid #2a2a2a; border-radius: 8px; padding: 14px; background: #181818;
 }
 .card h3 { margin: 0 0 6px; font-size: 15px; }
-svg.map { width: 100%; height: auto; background: #1a1a1a; border-radius: 8px; border: 1px solid #2a2a2a; }
+svg.map { width: 100%; height: auto; background: #1a1a1a; border-radius: 8px; border: 1px solid #2a2a2a; overflow: visible; }
 code { font-size: 0.92em; background: #222; padding: 1px 5px; border-radius: 4px; }
