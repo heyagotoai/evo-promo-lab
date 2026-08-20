@@ -73,6 +73,55 @@ export function effectiveZlPerLiter(line: Line, mech: Mech): number {
   return (paid * line.price) / (got * line.packL);
 }
 
+/**
+ * Marża na jednym płatnym opakowaniu w danej mechanice.
+ * Gratisy nie dają przychodu, ale kosztują COGS — stąd unitMult przy koszcie.
+ */
+export function packMargin(line: Line, mech: Mech): number {
+  const packRev = mech.kind === "pct" ? line.price * (1 - mech.depth) : line.price;
+  return packRev - mech.unitMult * line.cogs;
+}
+
+/**
+ * Próg opłacalności: jaka musi być elastyczność linii, żeby akcja wyszła
+ * dokładnie na zero marży wobec tygodnia bez gazetki. Liczone wprost z ceny,
+ * kosztu wytworzenia i mechaniki — bez żadnego założenia o rynku.
+ * Infinity = mechanika nie wychodzi na zero przy żadnym wolumenie.
+ */
+export function breakEvenElasticity(line: Line, mech: Mech): number {
+  if (mech.kind === "off") return 0;
+  const base = line.price - line.cogs;
+  const promo = packMargin(line, mech);
+  if (promo <= 0) return Infinity;
+  if (base <= 0) return 0;
+  const k = mech.depth * (mech.minPaid > 1 ? 0.88 : 1);
+  if (k <= 0) return Infinity;
+  return (base / promo - 1) / k;
+}
+
+/**
+ * Ile razy musiałby wzrosnąć wolumen płatnych opakowań, żeby akcja wyszła na zero.
+ * Powyżej MAX_LIFT jest to nieosiągalne niezależnie od elastyczności.
+ */
+export function requiredLift(line: Line, mech: Mech): number {
+  if (mech.kind === "off") return 0;
+  const base = line.price - line.cogs;
+  const promo = packMargin(line, mech);
+  if (promo <= 0) return Infinity;
+  if (base <= 0) return 0;
+  return base / promo - 1;
+}
+
+/** Czy próg opłacalności jest w ogóle w zasięgu modelu (sufit liftu). */
+export function reachable(line: Line, mech: Mech): boolean {
+  return requiredLift(line, mech) <= MAX_LIFT + 1e-9;
+}
+
+/** Ile brakuje (lub zostaje) elastyczności wobec progu, przy danej gałce skalującej. */
+export function breakEvenGap(line: Line, mech: Mech, elastScale: number): number {
+  return line.elasticity * elastScale - breakEvenElasticity(line, mech);
+}
+
 export type Mechs = Record<LineId, MechId>;
 
 /** Mechanika globalna (jedna na 12 tygodni) albo osobna dla każdego tygodnia. */

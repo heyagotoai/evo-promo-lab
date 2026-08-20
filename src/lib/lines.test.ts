@@ -2,6 +2,12 @@ import { describe, expect, it } from "vitest";
 import {
   CANNIBAL_FLOOR,
   LINES,
+  MECHS,
+  breakEvenElasticity,
+  breakEvenGap,
+  packMargin,
+  reachable,
+  requiredLift,
   MAX_LIFT,
   MECH_BY_ID,
   WEEKS,
@@ -205,5 +211,63 @@ describe("drabina zł/L", () => {
     const eu = LINES.find((l) => l.id === "euforia")!;
     const fl = LINES.find((l) => l.id === "flirt")!;
     expect(effectiveZlPerLiter(eu, MECH_BY_ID.g22)).toBeLessThan(zlL(fl));
+  });
+});
+
+describe("próg opłacalności", () => {
+  const line = (id: LineId) => LINES.find((l) => l.id === id)!;
+
+  it("na progu akcja daje dokładnie tyle samo marży co tydzień bez gazetki", () => {
+    for (const l of LINES) {
+      for (const m of MECHS) {
+        if (m.kind === "off") continue;
+        const need = breakEvenElasticity(l, m);
+        if (!Number.isFinite(need) || !reachable(l, m)) continue;
+        const tuned: Line[] = [{ ...l, elasticity: need }];
+        const params = { ...P, cannibal: 0, pantry: 0, fatigue: 0 };
+        const promo = simulate(weeksOn([l.id], 0, 1), { ...NO_PROMO, [l.id]: m.id } as Mechs, params, tuned);
+        const quiet = simulate(silent(), NO_PROMO, params, tuned);
+        expect(promo[0].margin).toBeCloseTo(quiet[0].margin, 4);
+      }
+    }
+  });
+
+  it("powyżej progu akcja zarabia, poniżej traci", () => {
+    const fl = line("flirt");
+    const m = MECH_BY_ID.d20;
+    const need = breakEvenElasticity(fl, m);
+    const params = { ...P, cannibal: 0, pantry: 0, fatigue: 0 };
+    const run = (e: number) =>
+      simulate(weeksOn(["flirt"], 0, 1), { ...NO_PROMO, flirt: "d20" }, params, [{ ...fl, elasticity: e }])[0].margin;
+    const quiet = simulate(silent(), NO_PROMO, params, [{ ...fl, elasticity: 1 }])[0].margin;
+    expect(run(need * 1.3)).toBeGreaterThan(quiet);
+    expect(run(need * 0.7)).toBeLessThan(quiet);
+  });
+
+  it("mechanika, w której gratisy zjadają całą marżę, nie wychodzi na zero nigdy", () => {
+    const thin: Line = { ...line("pycha"), price: 20, cogs: 11 };
+    expect(breakEvenElasticity(thin, MECH_BY_ID.g11)).toBe(Infinity);
+    expect(packMargin(thin, MECH_BY_ID.g11)).toBeLessThan(0);
+  });
+
+  it("głębsza promocja wymaga wyższej elastyczności", () => {
+    const re = line("retro");
+    const d = ["d10", "d20", "d30", "d40"] as const;
+    for (let i = 1; i < d.length; i++) {
+      expect(breakEvenElasticity(re, MECH_BY_ID[d[i]])).toBeGreaterThan(breakEvenElasticity(re, MECH_BY_ID[d[i - 1]]));
+    }
+  });
+
+  it("próg poza sufitem liftu jest oznaczony jako nieosiągalny", () => {
+    const eu = line("euforia");
+    expect(reachable(eu, MECH_BY_ID.d50)).toBe(false);
+    expect(requiredLift(eu, MECH_BY_ID.d50)).toBeGreaterThan(MAX_LIFT);
+    expect(reachable(eu, MECH_BY_ID.d10)).toBe(true);
+  });
+
+  it("gap mówi, ile elastyczności brakuje przy danej gałce", () => {
+    const re = line("retro");
+    expect(breakEvenGap(re, MECH_BY_ID.d20, 1)).toBeCloseTo(re.elasticity - breakEvenElasticity(re, MECH_BY_ID.d20), 9);
+    expect(breakEvenGap(re, MECH_BY_ID.d20, 1)).toBeLessThan(0);
   });
 });
