@@ -1,8 +1,10 @@
 import { Link, NavLink, Route, Routes } from "react-router-dom";
+import { AdvisorPage } from "./pages/Advisor";
 import { HomePage } from "./pages/Home";
 import { IceSalesPage } from "./pages/IceSales";
 import { LinesPromoPage } from "./pages/LinesPromo";
 import { OneMaxPage } from "./pages/OneMax";
+import { OptimizerPage } from "./pages/Optimizer";
 import { WorkdayPage } from "./pages/Workday";
 
 export default function App() {
@@ -12,6 +14,8 @@ export default function App() {
         <Link to="/" className="brand">
           Evo lab
         </Link>
+        <NavLink to="/doradca">Doradca</NavLink>
+        <NavLink to="/plan">Optymalizator</NavLink>
         <NavLink to="/linie">Linie lodów</NavLink>
         <NavLink to="/handlowiec">Handlowiec</NavLink>
         <NavLink to="/trasa">Trasa</NavLink>
@@ -19,6 +23,8 @@ export default function App() {
       </nav>
       <Routes>
         <Route path="/" element={<HomePage />} />
+        <Route path="/doradca" element={<AdvisorPage />} />
+        <Route path="/plan" element={<OptimizerPage />} />
         <Route path="/linie" element={<LinesPromoPage />} />
         <Route path="/handlowiec" element={<IceSalesPage />} />
         <Route path="/trasa" element={<WorkdayPage />} />

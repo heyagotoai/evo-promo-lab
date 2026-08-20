@@ -11,6 +11,14 @@ export type Line = {
   cogs: number;
 };
 
+export const WEEKS = 12;
+
+/** Sufit liftu: promocja nie skaluje sprzedaży w nieskończoność. */
+export const MAX_LIFT = 2.5;
+
+/** Podłoga sprzedaży linii kanibalizowanej: nie da się zjeść całej sąsiadki. */
+export const CANNIBAL_FLOOR = 0.12;
+
 export const CARTON: Record<LineId, number> = {
   euforia: 6,
   retro: 6,
@@ -65,7 +73,59 @@ export function effectiveZlPerLiter(line: Line, mech: Mech): number {
   return (paid * line.price) / (got * line.packL);
 }
 
+/**
+ * Marża na jednym płatnym opakowaniu w danej mechanice.
+ * Gratisy nie dają przychodu, ale kosztują COGS — stąd unitMult przy koszcie.
+ */
+export function packMargin(line: Line, mech: Mech): number {
+  const packRev = mech.kind === "pct" ? line.price * (1 - mech.depth) : line.price;
+  return packRev - mech.unitMult * line.cogs;
+}
+
+/**
+ * Próg opłacalności: jaka musi być elastyczność linii, żeby akcja wyszła
+ * dokładnie na zero marży wobec tygodnia bez gazetki. Liczone wprost z ceny,
+ * kosztu wytworzenia i mechaniki — bez żadnego założenia o rynku.
+ * Infinity = mechanika nie wychodzi na zero przy żadnym wolumenie.
+ */
+export function breakEvenElasticity(line: Line, mech: Mech): number {
+  if (mech.kind === "off") return 0;
+  const base = line.price - line.cogs;
+  const promo = packMargin(line, mech);
+  if (promo <= 0) return Infinity;
+  if (base <= 0) return 0;
+  const k = mech.depth * (mech.minPaid > 1 ? 0.88 : 1);
+  if (k <= 0) return Infinity;
+  return (base / promo - 1) / k;
+}
+
+/**
+ * Ile razy musiałby wzrosnąć wolumen płatnych opakowań, żeby akcja wyszła na zero.
+ * Powyżej MAX_LIFT jest to nieosiągalne niezależnie od elastyczności.
+ */
+export function requiredLift(line: Line, mech: Mech): number {
+  if (mech.kind === "off") return 0;
+  const base = line.price - line.cogs;
+  const promo = packMargin(line, mech);
+  if (promo <= 0) return Infinity;
+  if (base <= 0) return 0;
+  return base / promo - 1;
+}
+
+/** Czy próg opłacalności jest w ogóle w zasięgu modelu (sufit liftu). */
+export function reachable(line: Line, mech: Mech): boolean {
+  return requiredLift(line, mech) <= MAX_LIFT + 1e-9;
+}
+
+/** Ile brakuje (lub zostaje) elastyczności wobec progu, przy danej gałce skalującej. */
+export function breakEvenGap(line: Line, mech: Mech, elastScale: number): number {
+  return line.elasticity * elastScale - breakEvenElasticity(line, mech);
+}
+
 export type Mechs = Record<LineId, MechId>;
+
+/** Mechanika globalna (jedna na 12 tygodni) albo osobna dla każdego tygodnia. */
+export type MechPlan = Mechs | Mechs[];
 
 export type WeekRow = {
   week: number;
@@ -75,6 +135,9 @@ export type WeekRow = {
   liters: number;
   cartons: number;
   packs: Record<LineId, number>;
+  lineMargin: Record<LineId, number>;
+  mechs: Mechs;
+  capped: boolean;
   fullPriceEuforia: number;
 };
 
@@ -111,11 +174,23 @@ export const CARTON_CAP_OPTIONS = Array.from({ length: 15 }, (_, i) => {
   return { value: String(n), label: `${n} kartonów` };
 });
 
-function neighbors(id: LineId): LineId[] {
-  if (id === "euforia") return ["retro"];
-  if (id === "retro") return ["euforia", "pycha"];
-  if (id === "pycha") return ["retro", "flirt"];
-  return ["pycha", "retro"];
+/**
+ * Bliskość półkowa: jak mocno promocja jednej linii podbiera drugą.
+ * Graf jest symetryczny — jeśli Flirt kradnie Retro, Retro kradnie Flirtowi tyle samo.
+ */
+const AFFINITY: { a: LineId; b: LineId; w: number }[] = [
+  { a: "retro", b: "pycha", w: 1 },
+  { a: "pycha", b: "flirt", w: 0.5 },
+  { a: "euforia", b: "retro", w: 0.45 },
+  { a: "retro", b: "flirt", w: 0.35 },
+  { a: "euforia", b: "pycha", w: 0.3 },
+  { a: "euforia", b: "flirt", w: 0.1 },
+];
+
+export function affinity(a: LineId, b: LineId): number {
+  if (a === b) return 0;
+  const e = AFFINITY.find((x) => (x.a === a && x.b === b) || (x.a === b && x.b === a));
+  return e ? e.w : 0;
 }
 
 export function filterCalendar(weeks: LineId[][], enabled: Record<LineId, boolean>): LineId[][] {
@@ -123,11 +198,11 @@ export function filterCalendar(weeks: LineId[][], enabled: Record<LineId, boolea
 }
 
 export function buildCalendar(strategy: string, burst: number): LineId[][] {
-  const weeks: LineId[][] = Array.from({ length: 12 }, () => []);
+  const weeks: LineId[][] = Array.from({ length: WEEKS }, () => []);
   const put = (start: number, len: number, ids: LineId[]) => {
     for (let i = 0; i < len; i++) {
       const w = start + i;
-      if (w >= 0 && w < 12) weeks[w] = ids.slice();
+      if (w >= 0 && w < WEEKS) weeks[w] = ids.slice();
     }
   };
   const b = burst;
@@ -152,81 +227,116 @@ export function buildCalendar(strategy: string, burst: number): LineId[][] {
     put(b + 1, b, ["flirt"]);
     put(2 * b + 2, 2, ["euforia"]);
   } else if (strategy === "allOn") {
-    for (let w = 0; w < 12; w++) weeks[w] = LINE_IDS.slice();
+    for (let w = 0; w < WEEKS; w++) weeks[w] = LINE_IDS.slice();
   } else if (strategy === "alwaysFlirt") {
-    for (let w = 0; w < 12; w++) weeks[w] = ["flirt"];
+    for (let w = 0; w < WEEKS; w++) weeks[w] = ["flirt"];
   }
   return weeks;
 }
 
+const ZERO: Record<LineId, number> = { euforia: 0, retro: 0, pycha: 0, flirt: 0 };
+
 export function simulate(
   calendar: LineId[][],
-  mechs: Mechs,
+  mechPlan: MechPlan,
   p: SimParams,
   lines: Line[] = LINES,
 ): WeekRow[] {
-  const streak: Record<LineId, number> = { euforia: 0, retro: 0, pycha: 0, flirt: 0 };
-  const offStreak: Record<LineId, number> = { euforia: 0, retro: 0, pycha: 0, flirt: 0 };
+  const perWeek = Array.isArray(mechPlan);
+  const mechsAt = (w: number): Mechs =>
+    perWeek ? ((mechPlan as Mechs[])[w] ?? (mechPlan as Mechs[])[0]) : (mechPlan as Mechs);
+
+  const streak: Record<LineId, number> = { ...ZERO };
+  const offStreak: Record<LineId, number> = { ...ZERO };
+  const promoted: Record<LineId, boolean> = { euforia: false, retro: false, pycha: false, flirt: false };
+  const lastMechKind: Record<LineId, Mech["kind"]> = {
+    euforia: "off",
+    retro: "off",
+    pycha: "off",
+    flirt: "off",
+  };
   const rows: WeekRow[] = [];
 
-  for (let w = 0; w < 12; w++) {
+  for (let w = 0; w < WEEKS; w++) {
     const on = calendar[w] ?? [];
-    const paid: Record<LineId, number> = { euforia: 0, retro: 0, pycha: 0, flirt: 0 };
-    const out: Record<LineId, number> = { euforia: 0, retro: 0, pycha: 0, flirt: 0 };
+    const mechs = mechsAt(w);
+    const base: Record<LineId, number> = { ...ZERO };
+    const paid: Record<LineId, number> = { ...ZERO };
+    const out: Record<LineId, number> = { ...ZERO };
+    const activeOf: Record<LineId, boolean> = { euforia: false, retro: false, pycha: false, flirt: false };
 
     for (const line of lines) {
       const mech = MECH_BY_ID[mechs[line.id]];
       const active = on.includes(line.id) && mech.kind !== "off";
+      activeOf[line.id] = active;
       if (active) {
         streak[line.id] += 1;
         offStreak[line.id] = 0;
+        promoted[line.id] = true;
+        lastMechKind[line.id] = mech.kind;
       } else {
         streak[line.id] = 0;
         offStreak[line.id] += 1;
       }
+
       const fatigueMul = active ? Math.max(0.35, 1 - p.fatigue * (streak[line.id] - 1)) : 1;
-      const pantryMul =
-        !active && offStreak[line.id] <= 2
-          ? 1 - p.pantry * (MECH_BY_ID[mechs[line.id]].kind === "gratis" ? 1.35 : 1)
-          : 1;
-      const lift = active
+      // Dołek spiżarni tylko po realnie zakończonej fali — nie na starcie horyzontu.
+      const inDip = !active && promoted[line.id] && offStreak[line.id] <= 2;
+      const pantryMul = inDip
+        ? 1 - p.pantry * (lastMechKind[line.id] === "gratis" ? 1.35 : 1)
+        : 1;
+      const rawLift = active
         ? line.elasticity * p.elastScale * mech.depth * fatigueMul * (mech.minPaid > 1 ? 0.88 : 1)
         : 0;
-      const packs = line.basePacks * p.season * pantryMul * (1 + lift);
-      paid[line.id] = packs;
-      out[line.id] = packs * (active ? mech.unitMult : 1);
+      const lift = Math.min(MAX_LIFT, rawLift);
+
+      base[line.id] = line.basePacks * p.season;
+      paid[line.id] = base[line.id] * pantryMul * (1 + lift);
     }
 
+    // Kanibalizacja liczona równolegle, ze stanu sprzed kradzieży,
+    // żeby wynik nie zależał od kolejności linii w tablicy.
+    const before = { ...paid };
+    const loss: Record<LineId, number> = { ...ZERO };
     for (const line of lines) {
-      const mech = MECH_BY_ID[mechs[line.id]];
-      if (!(on.includes(line.id) && mech.kind !== "off")) continue;
-      const extra = Math.max(0, paid[line.id] - line.basePacks * p.season);
+      if (!activeOf[line.id]) continue;
+      const extra = Math.max(0, before[line.id] - base[line.id]);
       const steal = extra * p.cannibal;
-      const nb = neighbors(line.id);
-      const share = steal / nb.length;
-      for (const n of nb) {
-        const floor = line.basePacks * 0.12;
-        const take = Math.min(share, Math.max(0, paid[n] - floor));
-        paid[n] -= take;
-        const nActive = on.includes(n) && MECH_BY_ID[mechs[n]].kind !== "off";
-        out[n] = paid[n] * (nActive ? MECH_BY_ID[mechs[n]].unitMult : 1);
-      }
+      if (steal <= 0) continue;
+      const targets = lines
+        .filter((l) => l.id !== line.id)
+        .map((l) => ({ id: l.id, w: affinity(line.id, l.id) }))
+        .filter((t) => t.w > 0);
+      const sum = targets.reduce((s, t) => s + t.w, 0);
+      if (sum <= 0) continue;
+      for (const t of targets) loss[t.id] += steal * (t.w / sum);
+    }
+    for (const line of lines) {
+      // Podłoga liczona z linii kradzionej, nie z kradnącej.
+      const floor = Math.min(before[line.id], base[line.id] * CANNIBAL_FLOOR);
+      paid[line.id] = Math.max(floor, before[line.id] - loss[line.id]);
+      out[line.id] = paid[line.id] * (activeOf[line.id] ? MECH_BY_ID[mechs[line.id]].unitMult : 1);
     }
 
     let revenue = 0;
     let cost = 0;
     let liters = 0;
+    const lineMargin: Record<LineId, number> = { ...ZERO };
     for (const line of lines) {
       const mech = MECH_BY_ID[mechs[line.id]];
-      const active = on.includes(line.id) && mech.kind !== "off";
+      const active = activeOf[line.id];
       const packRev = active && mech.kind === "pct" ? line.price * (1 - mech.depth) : line.price;
-      revenue += paid[line.id] * packRev;
-      cost += out[line.id] * line.cogs;
+      const rev = paid[line.id] * packRev;
+      const c = out[line.id] * line.cogs;
+      revenue += rev;
+      cost += c;
       liters += out[line.id] * line.packL;
+      lineMargin[line.id] = rev - c;
     }
     let cartons = cartonsOf(out);
     const load = p.capMode === "liters" ? liters : cartons;
-    if (load > p.cap) {
+    const capped = p.cap > 0 && load > p.cap;
+    if (capped) {
       const scale = p.cap / load;
       revenue *= scale;
       cost *= scale;
@@ -235,10 +345,9 @@ export function simulate(
       for (const id of LINE_IDS) {
         paid[id] *= scale;
         out[id] *= scale;
+        lineMargin[id] *= scale;
       }
     }
-    const euMech = MECH_BY_ID[mechs.euforia];
-    const euOn = on.includes("euforia") && euMech.kind !== "off";
     rows.push({
       week: w + 1,
       on: on.slice(),
@@ -247,13 +356,24 @@ export function simulate(
       liters,
       cartons,
       packs: out,
-      fullPriceEuforia: euOn ? 0 : paid.euforia,
+      lineMargin,
+      mechs,
+      capped,
+      fullPriceEuforia: activeOf.euforia ? 0 : paid.euforia,
     });
   }
   return rows;
 }
 
-export function totals(rows: WeekRow[]) {
+export type Totals = {
+  revenue: number;
+  margin: number;
+  liters: number;
+  cartons: number;
+  fullPriceEuforia: number;
+};
+
+export function totals(rows: WeekRow[]): Totals {
   return rows.reduce(
     (a, r) => ({
       revenue: a.revenue + r.revenue,
