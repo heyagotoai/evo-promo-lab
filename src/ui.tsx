@@ -51,6 +51,29 @@ export function Field({
   );
 }
 
+export function NumberInput({
+  value,
+  onChange,
+  step = "0.1",
+  min = "0",
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  step?: string;
+  min?: string;
+}) {
+  return (
+    <input
+      className="field"
+      type="number"
+      step={step}
+      min={min}
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+    />
+  );
+}
+
 export function Stat({
   value,
   label,

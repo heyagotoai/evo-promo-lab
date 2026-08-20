@@ -11,6 +11,13 @@ export type Line = {
   cogs: number;
 };
 
+export const CARTON: Record<LineId, number> = {
+  euforia: 6,
+  retro: 6,
+  pycha: 4,
+  flirt: 8,
+};
+
 export const LINES: Line[] = [
   { id: "euforia", name: "Euforia", packL: 1, price: 20, shelf: "premium, najwyższa półka", basePacks: 700, elasticity: 1.15, cogs: 9 },
   { id: "retro", name: "Retro", packL: 1, price: 17, shelf: "średnia+, jakość blisko Pychy", basePacks: 1300, elasticity: 1.7, cogs: 7.4 },
@@ -66,19 +73,43 @@ export type WeekRow = {
   revenue: number;
   margin: number;
   liters: number;
+  cartons: number;
   packs: Record<LineId, number>;
   fullPriceEuforia: number;
 };
+
+export type CapMode = "liters" | "cartons";
 
 export type SimParams = {
   season: number;
   cannibal: number;
   fatigue: number;
   pantry: number;
-  cogsScale: number;
   elastScale: number;
-  literCap: number;
+  capMode: CapMode;
+  cap: number;
 };
+
+export function cartonsOf(packs: Record<LineId, number>): number {
+  return LINE_IDS.reduce((s, id) => s + packs[id] / CARTON[id], 0);
+}
+
+export function applyPrices(
+  price: Record<LineId, number>,
+  cogs: Record<LineId, number>,
+): Line[] {
+  return LINES.map((l) => ({ ...l, price: price[l.id], cogs: cogs[l.id] }));
+}
+
+export const LITER_CAP_OPTIONS = Array.from({ length: 20 }, (_, i) => {
+  const v = String((i + 1) * 1000);
+  return { value: v, label: `${i + 1} tys. L` };
+});
+
+export const CARTON_CAP_OPTIONS = Array.from({ length: 15 }, (_, i) => {
+  const n = (i + 1) * 100;
+  return { value: String(n), label: `${n} kartonów` };
+});
 
 function neighbors(id: LineId): LineId[] {
   if (id === "euforia") return ["retro"];
@@ -124,7 +155,12 @@ export function buildCalendar(strategy: string, burst: number): LineId[][] {
   return weeks;
 }
 
-export function simulate(calendar: LineId[][], mechs: Mechs, p: SimParams): WeekRow[] {
+export function simulate(
+  calendar: LineId[][],
+  mechs: Mechs,
+  p: SimParams,
+  lines: Line[] = LINES,
+): WeekRow[] {
   const streak: Record<LineId, number> = { euforia: 0, retro: 0, pycha: 0, flirt: 0 };
   const offStreak: Record<LineId, number> = { euforia: 0, retro: 0, pycha: 0, flirt: 0 };
   const rows: WeekRow[] = [];
@@ -134,7 +170,7 @@ export function simulate(calendar: LineId[][], mechs: Mechs, p: SimParams): Week
     const paid: Record<LineId, number> = { euforia: 0, retro: 0, pycha: 0, flirt: 0 };
     const out: Record<LineId, number> = { euforia: 0, retro: 0, pycha: 0, flirt: 0 };
 
-    for (const line of LINES) {
+    for (const line of lines) {
       const mech = MECH_BY_ID[mechs[line.id]];
       const active = on.includes(line.id) && mech.kind !== "off";
       if (active) {
@@ -157,7 +193,7 @@ export function simulate(calendar: LineId[][], mechs: Mechs, p: SimParams): Week
       out[line.id] = packs * (active ? mech.unitMult : 1);
     }
 
-    for (const line of LINES) {
+    for (const line of lines) {
       const mech = MECH_BY_ID[mechs[line.id]];
       if (!(on.includes(line.id) && mech.kind !== "off")) continue;
       const extra = Math.max(0, paid[line.id] - line.basePacks * p.season);
@@ -176,19 +212,22 @@ export function simulate(calendar: LineId[][], mechs: Mechs, p: SimParams): Week
     let revenue = 0;
     let cost = 0;
     let liters = 0;
-    for (const line of LINES) {
+    for (const line of lines) {
       const mech = MECH_BY_ID[mechs[line.id]];
       const active = on.includes(line.id) && mech.kind !== "off";
       const packRev = active && mech.kind === "pct" ? line.price * (1 - mech.depth) : line.price;
       revenue += paid[line.id] * packRev;
-      cost += out[line.id] * line.cogs * p.cogsScale;
+      cost += out[line.id] * line.cogs;
       liters += out[line.id] * line.packL;
     }
-    if (liters > p.literCap) {
-      const scale = p.literCap / liters;
+    let cartons = cartonsOf(out);
+    const load = p.capMode === "liters" ? liters : cartons;
+    if (load > p.cap) {
+      const scale = p.cap / load;
       revenue *= scale;
       cost *= scale;
-      liters = p.literCap;
+      liters *= scale;
+      cartons *= scale;
       for (const id of LINE_IDS) {
         paid[id] *= scale;
         out[id] *= scale;
@@ -202,6 +241,7 @@ export function simulate(calendar: LineId[][], mechs: Mechs, p: SimParams): Week
       revenue,
       margin: revenue - cost,
       liters,
+      cartons,
       packs: out,
       fullPriceEuforia: euOn ? 0 : paid.euforia,
     });
@@ -215,9 +255,10 @@ export function totals(rows: WeekRow[]) {
       revenue: a.revenue + r.revenue,
       margin: a.margin + r.margin,
       liters: a.liters + r.liters,
+      cartons: a.cartons + r.cartons,
       fullPriceEuforia: a.fullPriceEuforia + r.fullPriceEuforia,
     }),
-    { revenue: 0, margin: 0, liters: 0, fullPriceEuforia: 0 },
+    { revenue: 0, margin: 0, liters: 0, cartons: 0, fullPriceEuforia: 0 },
   );
 }
 
