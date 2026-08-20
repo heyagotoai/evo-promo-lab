@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { Button, Callout, LineChart, Stat, Table, chartGreen, pln } from "../ui";
+import { Button, Callout, Field, LineChart, NumberInput, Stat, Table, chartGreen, pln } from "../ui";
+import { makeRng, shuffled, type Rng } from "../lib/rng";
 
 type Shop = { id: number; name: string; short: string; x: number; y: number; value: number; dwell: number };
 const SHOPS: Shop[] = [
@@ -40,13 +41,8 @@ function decode(order: number[]): Plan {
   }
   return { value, minutes: t + DIST[cur][0], visited };
 }
-function shuffle(ids: number[]) {
-  const a = ids.slice();
-  for (let i = a.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [a[i], a[j]] = [a[j], a[i]];
-  }
-  return a;
+function shuffle(ids: number[], rng: Rng) {
+  return shuffled(rng, ids);
 }
 function greedy(key: "near" | "val"): Plan {
   const left = new Set(IDS);
@@ -73,10 +69,10 @@ function greedy(key: "near" | "val"): Plan {
   }
   return { value, minutes: t + DIST[cur][0], visited };
 }
-function ox(a: number[], b: number[]) {
+function ox(a: number[], b: number[], rng: Rng) {
   const n = a.length;
-  let i = Math.floor(Math.random() * n);
-  let j = Math.floor(Math.random() * n);
+  let i = Math.floor(rng() * n);
+  let j = Math.floor(rng() * n);
   if (i > j) [i, j] = [j, i];
   const child = Array(n).fill(-1);
   const taken = new Set<number>();
@@ -101,34 +97,43 @@ function bestCh(pop: number[][]) {
 const NEAR = greedy("near");
 const VALUE = greedy("val");
 
+type Run = { rng: Rng; pop: number[][]; gen: number; hist: number[] };
+
+/** Jeden obiekt stanu: wykres pokolenia 0 pokazuje tę samą populację co mapa. */
+function startRun(seed: number): Run {
+  const rng = makeRng(seed);
+  const pop = Array.from({ length: N }, () => shuffle(IDS, rng));
+  return { rng, pop, gen: 0, hist: [decode(bestCh(pop)).value] };
+}
+
 export function IceSalesPage() {
-  const [pop, setPop] = useState(() => Array.from({ length: N }, () => shuffle(IDS)));
-  const [gen, setGen] = useState(0);
-  const [hist, setHist] = useState(() => [decode(bestCh(Array.from({ length: N }, () => shuffle(IDS)))).value]);
+  const [seed, setSeed] = useState("1");
+  const [state, setState] = useState<Run>(() => startRun(1));
+  const pop = state.pop;
+  const gen = state.gen;
+  const hist = state.hist;
 
   const chrom = bestCh(pop);
   const plan = decode(chrom);
   const skipped = IDS.filter((id) => !plan.visited.includes(id));
   const beats = plan.value > VALUE.value;
 
-  const reset = () => {
-    const p = Array.from({ length: N }, () => shuffle(IDS));
-    setPop(p);
-    setGen(0);
-    setHist([decode(bestCh(p)).value]);
-  };
+  const reset = (s: number) => setState(startRun(s >>> 0));
+  // Generator ma stan wewnętrzny, więc liczymy w obsłudze zdarzenia,
+  // a do setState idzie gotowa wartość.
   const run = (k: number) => {
-    let p = pop;
-    let g = gen;
-    const h = [...hist];
+    const rng = state.rng;
+    let p = state.pop;
+    let g = state.gen;
+    const h = [...state.hist];
     for (let i = 0; i < k; i++) {
       const ranked = [...p].sort((a, b) => decode(b).value - decode(a).value);
       const next = [ranked[0].slice(), ranked[1].slice()];
       while (next.length < N) {
-        let c = ox(ranked[Math.floor(Math.random() * 8)] ?? ranked[0], ranked[Math.floor(Math.random() * 8)] ?? ranked[1]);
-        if (Math.random() < 0.45) {
-          const i1 = Math.floor(Math.random() * c.length);
-          let j = Math.floor(Math.random() * c.length);
+        const c = ox(ranked[Math.floor(rng() * 8)], ranked[Math.floor(rng() * 8)], rng);
+        if (rng() < 0.45) {
+          const i1 = Math.floor(rng() * c.length);
+          let j = Math.floor(rng() * c.length);
           if (j === i1) j = (j + 1) % c.length;
           [c[i1], c[j]] = [c[j], c[i1]];
         }
@@ -138,9 +143,7 @@ export function IceSalesPage() {
       g += 1;
       h.push(decode(bestCh(p)).value);
     }
-    setPop(p);
-    setGen(g);
-    setHist(h.slice(-80));
+    setState({ rng, pop: p, gen: g, hist: h.slice(-80) });
   };
 
   const path = [0, ...plan.visited, 0].map((id) => `${SHOPS[id].x},${SHOPS[id].y}`).join(" ");
@@ -175,7 +178,17 @@ export function IceSalesPage() {
         <Button variant="primary" onClick={() => run(40)}>
           +40 pokoleń
         </Button>
-        <Button onClick={reset}>Przywróć start</Button>
+        <Button onClick={() => reset(Number(seed))}>Przywróć start</Button>
+        <Field label="Ziarno losowe">
+          <NumberInput
+            value={seed}
+            step="1"
+            onChange={(v) => {
+              setSeed(v);
+              reset(Number(v));
+            }}
+          />
+        </Field>
         <span className="small">
           Pokolenie {gen} · {plan.minutes.toFixed(0)}/{BUDGET} min
         </span>

@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
-import { Button, Callout, LineChart, Stat, Table, chartBlue } from "../ui";
+import { Button, Callout, Field, LineChart, NumberInput, Stat, Table, chartBlue } from "../ui";
+import { makeRng, shuffled, type Rng } from "../lib/rng";
 
 type Stop = { id: number; name: string; short: string; x: number; y: number };
 const STOPS: Stop[] = [
@@ -29,13 +30,8 @@ function tour(order: number[]) {
   }
   return d + DIST[prev][0];
 }
-function shuffle(ids: number[]) {
-  const a = ids.slice();
-  for (let i = a.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [a[i], a[j]] = [a[j], a[i]];
-  }
-  return a;
+function shuffle(ids: number[], rng: Rng) {
+  return shuffled(rng, ids);
 }
 function greedy() {
   const left = new Set(IDS);
@@ -77,10 +73,10 @@ function brute() {
   walk(IDS, []);
   return { order: bestO, minutes: best };
 }
-function ox(a: number[], b: number[]) {
+function ox(a: number[], b: number[], rng: Rng) {
   const n = a.length;
-  let i = Math.floor(Math.random() * n);
-  let j = Math.floor(Math.random() * n);
+  let i = Math.floor(rng() * n);
+  let j = Math.floor(rng() * n);
   if (i > j) [i, j] = [j, i];
   const child = Array(n).fill(-1);
   const taken = new Set<number>();
@@ -101,16 +97,16 @@ function ox(a: number[], b: number[]) {
 function bestOf(pop: number[][]) {
   return pop.reduce((b, x) => (tour(x) < tour(b) ? x : b));
 }
-function step(pop: number[][]) {
+function step(pop: number[][], rng: Rng) {
   const ranked = [...pop].sort((a, b) => tour(a) - tour(b));
   const next = [ranked[0].slice(), ranked[1].slice()];
   while (next.length < N) {
-    const p1 = pop[Math.floor(Math.random() * N)];
-    const p2 = pop[Math.floor(Math.random() * N)];
-    let c = ox(tour(p1) < tour(p2) ? p1 : p2, tour(p1) < tour(p2) ? p2 : p1);
-    if (Math.random() < 0.4) {
-      const i = Math.floor(Math.random() * c.length);
-      let j = Math.floor(Math.random() * c.length);
+    const p1 = pop[Math.floor(rng() * N)];
+    const p2 = pop[Math.floor(rng() * N)];
+    const c = ox(tour(p1) < tour(p2) ? p1 : p2, tour(p1) < tour(p2) ? p2 : p1, rng);
+    if (rng() < 0.4) {
+      const i = Math.floor(rng() * c.length);
+      let j = Math.floor(rng() * c.length);
       if (j === i) j = (j + 1) % c.length;
       [c[i], c[j]] = [c[j], c[i]];
     }
@@ -123,34 +119,40 @@ const GREEDY = greedy();
 const GREEDY_MIN = tour(GREEDY);
 const OPT = brute();
 
+type Run = { rng: Rng; pop: number[][]; gen: number; hist: number[] };
+
+/** Jeden obiekt stanu: wykres pokolenia 0 pokazuje tę samą populację co mapa. */
+function startRun(seed: number): Run {
+  const rng = makeRng(seed);
+  const pop = Array.from({ length: N }, () => shuffle(IDS, rng));
+  return { rng, pop, gen: 0, hist: [tour(bestOf(pop))] };
+}
+
 export function WorkdayPage() {
-  const [pop, setPop] = useState(() => Array.from({ length: N }, () => shuffle(IDS)));
-  const [gen, setGen] = useState(0);
-  const [hist, setHist] = useState(() => [tour(bestOf(Array.from({ length: N }, () => shuffle(IDS))))]);
+  const [seed, setSeed] = useState("1");
+  const [state, setState] = useState<Run>(() => startRun(1));
+  const pop = state.pop;
+  const gen = state.gen;
+  const hist = state.hist;
 
   const best = bestOf(pop);
   const bestMin = tour(best);
   const hit = bestMin - OPT.minutes < 0.05;
 
-  const reset = () => {
-    const p = Array.from({ length: N }, () => shuffle(IDS));
-    setPop(p);
-    setGen(0);
-    setHist([tour(bestOf(p))]);
-  };
+  const reset = (s: number) => setState(startRun(s >>> 0));
+  // Generator ma stan wewnętrzny, więc liczymy w obsłudze zdarzenia,
+  // a do setState idzie gotowa wartość.
   const run = (k: number) => {
-    let p = pop;
-    let g = gen;
-    const h = [...hist];
+    let p = state.pop;
+    let g = state.gen;
+    const h = [...state.hist];
     for (let i = 0; i < k; i++) {
-      p = step(p);
+      p = step(p, state.rng);
       g += 1;
       h.push(tour(bestOf(p)));
       if (tour(bestOf(p)) - OPT.minutes < 0.05) break;
     }
-    setPop(p);
-    setGen(g);
-    setHist(h.slice(-80));
+    setState({ rng: state.rng, pop: p, gen: g, hist: h.slice(-80) });
   };
 
   const seq = [0, ...best, 0];
@@ -195,7 +197,17 @@ export function WorkdayPage() {
         <Button variant="primary" onClick={() => run(30)}>
           +30 pokoleń
         </Button>
-        <Button onClick={reset}>Przywróć start</Button>
+        <Button onClick={() => reset(Number(seed))}>Przywróć start</Button>
+        <Field label="Ziarno losowe">
+          <NumberInput
+            value={seed}
+            step="1"
+            onChange={(v) => {
+              setSeed(v);
+              reset(Number(v));
+            }}
+          />
+        </Field>
       </div>
       <div className="grid grid-2">
         <div>

@@ -1,8 +1,7 @@
 # Laboratorium promocji i ewolucji
 
-Interaktywne przykłady: od najprostszego algorytmu genetycznego, przez trasę i dzień handlowca, po kalendarz promo czterech linii lodów (Euforia, Retro, Pycha, Flirt).
-
-Liczby (COGS, popyt, elastyczność) są **syntetyczne** — do kręcenia gałkami, nie do listingu.
+Od opisu sytuacji, przez parametry wyliczone z Waszych danych, po kalendarz promo znaleziony algorytmem
+ewolucyjnym — plus trzy przykłady dydaktyczne, na których widać, jak taki algorytm działa.
 
 **Wykonawca dokumentacji:** Marcin Szczęsny
 
@@ -11,80 +10,172 @@ Liczby (COGS, popyt, elastyczność) są **syntetyczne** — do kręcenia gałka
 - Aplikacja: https://evo-promo-lab.vercel.app
 - Kod: https://github.com/heyagotoai/evo-promo-lab
 
-HashRouter: `/#/linie` · `/#/handlowiec` · `/#/trasa` · `/#/onemax`
+HashRouter: `/#/doradca` · `/#/plan` · `/#/linie` · `/#/handlowiec` · `/#/trasa` · `/#/onemax`
 
 ## Lokalnie
 
 ```bash
 npm install
-npm run dev
+npm run dev        # aplikacja
+npm test           # 70 testów modelu, optymalizatora i doradcy
+npm run typecheck  # tsc --noEmit
 ```
 
-## Co jest zaimplementowane
+## Ścieżka robocza
 
-### OneMax (`/#/onemax`)
+### 1. Doradca parametrów (`/#/doradca`)
 
-Klasyczny **algorytm genetyczny** na łańcuchu 20 bitów. Fitness = liczba jedynek.
+Opisujesz sytuację liczbami, które masz w raportach. Doradca **nie zgaduje** — każdą gałkę modelu wylicza,
+odwracając ten sam wzór, którego używa symulacja.
 
-- selekcja: turniej k=3
-- krzyżowanie: jednopunktowe (opcjonalnie wyłączane)
-- mutacja: bit flip z zadanym p
-- elityzm: 2 najlepsze osobniki bez zmian
+| Podajesz | Doradca wylicza |
+|---|---|
+| Sztuki w typowym tygodniu i w 1. tygodniu akcji | Elastyczność linii |
+| Sztuki w 3. tygodniu tej samej akcji | Zmęczenie fali |
+| Sztuki w 1. tygodniu po akcji | Dołek spiżarni |
+| Sztuki sąsiadki w tygodniu akcji | Kanibalizację |
+| Cennik i kalkulację kosztu | Progi opłacalności każdej mechaniki |
 
-Cel dydaktyczny: pokazać, że populacja + selekcja + szum znajdują optimum, gdy krajobraz jest gładki.
+Sell-out liczy sztuki **razem z gratisami**, model liczy lift na sztukach płatnych — doradca dzieli przez
+mnożnik mechaniki, więc 1+1 nie zawyża elastyczności dwukrotnie.
 
-### Kolejność wizyt (`/#/trasa`)
+Czego nie da się policzyć, zostaje wartością **DOMYŚLNĄ**, jawnie oznaczoną w tabeli odczytów, z pytaniem
+do zadania i miejscem, gdzie tej liczby szukać. Licznik pewności pokazuje, ile odczytów stoi na Waszych
+danych, a nie na modelu.
 
-**TSP** (komiwojażer): 7 obowiązkowych punktów, start i koniec w biurze. Genom = permutacja. Fitness = czas trasy (euklides × 0,25).
+Dane sprzeczne z modelem są **zgłaszane, a nie dopasowywane**: akcja, która nie podniosła sprzedaży;
+elastyczność poza skalą; kanibalizacja powyżej 100%; trzeci tydzień mocniejszy od pierwszego; koszt
+wytworzenia powyżej ceny; kotwica, która nie jest najdroższa za litr.
 
-- krzyżowanie OX (order crossover)
-- mutacja: zamiana dwóch miast
-- elityzm
-- baseline: zachłanny najbliższy sąsiad
-- optimum: brute force 7! = 5040 — da się policzyć w przeglądarce
+### 2. Optymalizator kalendarza (`/#/plan`)
 
-### Dzień handlowca (`/#/handlowiec`)
+**Algorytm ewolucyjny** na kalendarzu promo. Genom = mechanika każdej z 4 linii w każdym z 12 tygodni
+(48 genów, 9 alleli). Fitness = marża, litry albo obrót — z twardymi progami na pozostałych.
 
-**Orienteering / prize-collecting TSP**: 11 sklepów, budżet 6 godzin, nie da się wszędzie. Genom = kolejność priorytetów. Dekoder **pomija** punkt, jeśli dojazd + wizyta + powrót do hurtowni przekracza 360 min. Fitness = oczekiwane zł zamówień, nie kilometry.
+- porządek leksykograficzny: plan dopuszczalny > mniejsze złamanie progu > wyższy cel (bez wag i strojenia)
+- krzyżowanie po tygodniach + makro-mutacje: przesunięcie całej fali linii, zamiana dwóch tygodni
+- elityzm 2, selekcja turniejowa, populacja 60
+- populacja startowa zawiera 6 obecnych presetów — wynik nigdy nie jest gorszy od dzisiejszego planu
+- ziarno losowe w interfejsie: ten sam numer odtwarza dokładnie ten sam przebieg na prezentacji
 
-- OX + swap, elityzm
-- baseline: zachłanny najbliższy oraz zachłanny najwyższy kontrakt
-- pułapka: festiwal 9800 zł / 70 min vs korytarz plażowy
+**Twarde reguły** (funkcja naprawcza sprowadza każdy plan do legalnego — naprawa tylko wyłącza i spłyca,
+nigdy nie dokłada, więc z optymalizatora nie wychodzi plan łamiący którąkolwiek z nich):
 
-### Cztery linie lodów (`/#/linie`) — to nie jest GA
+| Reguła | Po co |
+|---|---|
+| Sufit głębokości na linię | Kotwica pełnej ceny nie schodzi za nisko |
+| Zakaz gratisów na kotwicy | 2+2 na premium wywraca drabinę |
+| Ochrona drabiny zł/L | Efektywna cena litra premium nie spada pod regularną tańszej linii |
+| Zakazane pary linii | Retro i Pycha to ten sam kupiec |
+| Maks. fala i minimalna cisza po niej | Marka nie zostaje „wiecznie w gazetce" |
+| Budżet tygodni gazetki na linię | Tyle, ile realnie wykupione |
+| Maks. linii naraz w tygodniu | Ile sieć wystawi |
+| Min. tygodni bez gazetki | Cena referencyjna ma się gdzie odbudować |
+| Limit łańcucha w każdym tygodniu (opcjonalnie) | Nadwyżka i tak nie dojedzie |
 
-Porównanie **gotowych presetów rotacji** (chroń premium, 1 po 1, Flirt+Euforia, Retro+Pycha, tylko Flirt, wszystkie naraz) na symulacji 12 tygodni.
+Audyt planu rozdziela **reguły** (nigdy nie złamane) od **skutków** (przycięcia limitem, tygodnie na
+minusie) — skutek to nie zasada, tylko rzecz do zobaczenia przed wysłaniem gazetki.
 
-W modelu: elastyczność, kanibalizacja sąsiadów (głównie Retro–Pycha), zmęczenie fali, dołek spiżarni (silniejszy przy gratis), COGS także na darmowych kubkach, limit łańcucha w **litrach albo kartonach**. Ceny regularne i wytworzenie są edytowalne.
+Optymalizator mówi wprost, gdy:
 
-Kartony: Euforia 6, Retro 6, Pycha 4, Flirt 8 szt.
+- **najlepszym planem jest brak promocji** — przy Waszych cenach i elastyczności każda mechanika oddaje
+  więcej marży, niż odzyskuje wolumenem;
+- **brief jest wewnętrznie sprzeczny** — nie da się naraz utrzymać wolumenu i nie przebić limitu; wtedy
+  pokazuje, czego brakuje i o ile, bo to wynik do eskalacji, a nie do obejścia;
+- **limit łańcucha jest wyczerpany samą sprzedażą regularną** — w upale sufit potrafi zniknąć zanim
+  ktokolwiek wydrukuje gazetkę.
 
-## Jak oceniać parametry (linie lodów)
+### 3. Presety rotacji (`/#/linie`)
 
-Ustawiaj tak, żeby opisywały rynek, nie wykres.
+Sześć gotowych rotacji na tym samym modelu (chroń premium, 1 po 1, Flirt+Euforia, Retro+Pycha, tylko Flirt,
+wszystkie naraz). Punkt odniesienia dla optymalizatora i intuicja: kanibalizacja, drabina zł/L, limit
+łańcucha, zmęczenie fali, dołek spiżarni.
+
+Ceny regularne i koszt wytworzenia są edytowalne. Kartony: Euforia 6, Retro 6, Pycha 4, Flirt 8 szt.
+
+## Próg opłacalności
+
+Najważniejsza liczba w całym narzędziu, bo liczona **wprost z ceny i kosztu wytworzenia — bez żadnego
+założenia o rynku**. Mówi, jaka musiałaby być elastyczność, żeby akcja wyszła dokładnie na zero wobec
+tygodnia bez gazetki:
+
+```
+marża na opakowaniu w akcji  =  cena po rabacie − mnożnik sztuk × koszt wytworzenia
+próg elastyczności           =  (marża regularna / marża w akcji − 1) / głębokość
+```
+
+Przy wartościach modelowych **żadna mechanika nie przekracza progu** — najtaniej wypada −10% i 2+1, i to
+one są najbliżej zera. To nie jest usterka, tylko wynik: przy tych marżach promocja kupuje wolumen, a nie
+zarabia. Jeśli akcja i tak musi się odbyć (listing, ekspozycja, zobowiązanie wolumenowe, obrona przed
+konkurencją), wpisz to jako twardy próg litrów albo obrotu — dostaniesz najtańszy sposób dowiezienia tego
+wolumenu, zamiast fikcyjnie podkręconej elastyczności.
+
+## Model symulacji
+
+12 tygodni, 4 linie. Wszystkie liczby domyślne są **syntetyczne** — do kręcenia gałkami, nie do listingu.
+
+- **Elastyczność** — lift = elastyczność × głębokość, z sufitem `MAX_LIFT`, żeby skrajne gałki nie
+  produkowały wyników nie do obrony.
+- **Zmęczenie fali** — każdy kolejny tydzień tej samej naklejki tnie lift, z podłogą 35%.
+- **Dołek spiżarni** — dwa tygodnie po **realnie zakończonej** fali; gratis kopie głębiej niż procent.
+- **Kanibalizacja** — symetryczny, ważony graf bliskości półkowej (Retro–Pycha najmocniej, Euforia–Flirt
+  najsłabiej). Liczona **równolegle**, ze stanu sprzed kradzieży, więc wynik nie zależy od kolejności linii.
+  Podłoga liczona z bazy linii kradzionej. Linia wyjęta z planu nie pochłania kradzieży w próżnię — jej
+  udział przechodzi na pozostałe.
+- **Limit łańcucha** — w litrach albo kartonach; nadwyżka jest przycinana i tydzień jest oznaczany.
+- **Gratisy** — pełny paragon, ale COGS także na darmowych kubkach.
+
+## Jak oceniać parametry
+
+Ustawiaj tak, żeby opisywały rynek, nie wykres. Doradca policzy większość z tego za Ciebie, jeśli podasz
+liczby z sell-outu.
 
 | Parametr | Jak ocenić |
 |---|---|
-| **Sezon** | Kalendarz i pogoda, nie głębokość gazetki. Deszcz / poza sezonem ×0,7; upał ×1,4. Skaluje wszystkie linie naraz. |
+| **Sezon** | Kalendarz i pogoda, nie głębokość gazetki. Deszcz / poza sezonem ×0,7; upał ×1,4. |
 | **Kanibalizacja** | Czy po promo jednej linii spada sąsiadka w tym samym sklepie. Retro ↔ Pycha zwykle wysoka; Euforia ↔ Flirt niska. |
-| **Zmęczenie fali** | Tydzień 1 vs tydzień 3 tej samej naklejki. Lift pada → ostre. Gazetka się nie nudzi → słabe. |
-| **Dołek po promo** | Czy tydzień po akcji lodówka klienta jest pełna. Gratis (zwłaszcza 2+2) głębszy niż %. Sell-out wraca od razu → płytki. |
-| **Elastyczność** | Ile sztuk dochodzi na % zniżki. Flirt / dyskont = łowcy; Euforia = twardszy popyt. Gałka skaluje lift całości. |
-| **Limit łańcucha** | Z logistyki. Litry gdy mroźnia liczy L; kartony gdy paleta. Ustaw sufit, w który zwykle uderzacie — nie średni tydzień. |
-| **Cena i wytworzenie** | Cennik i kalkulacja. Marża sztukowa = regularna − COGS. Gratis zjada ją darmowymi kubkami. COGS > cena → minus już bez gazetki. |
-| **Długość fali** | 2–3 tygodnie to norma. 6 tygodni pokazuje, jak zmęczenie zjada marżę. Po fali zostaw ciszę. |
-| **Mechanika** | % gdy nie chcesz zapychać mroźni. 1+1 / 2+1 gdy litry. 2+2 = max 50% w litrach + najgłębsza spiżarnia. Euforii prawie nigdy −50% ani 2+2. |
+| **Zmęczenie fali** | Tydzień 1 vs tydzień 3 tej samej naklejki. Lift pada → ostre. |
+| **Dołek po promo** | Czy tydzień po akcji lodówka klienta jest pełna. Gratis (zwłaszcza 2+2) głębszy niż %. |
+| **Elastyczność** | Ile sztuk dochodzi na % zniżki. Liczone ze sztuk **płatnych**, nie z sell-outu z gratisami. |
+| **Limit łańcucha** | Z logistyki. Ustaw sufit, w który zwykle uderzacie — nie średni tydzień. |
+| **Cena i wytworzenie** | Cennik i kalkulacja. Marża sztukowa = regularna − COGS. |
+| **Długość fali** | 2–3 tygodnie to norma. 6 tygodni pokazuje, jak zmęczenie zjada marżę. |
+| **Mechanika** | % gdy nie chcesz zapychać mroźni. 1+1 / 2+1 gdy litry. 2+2 = max 50% w litrach + najgłębsza spiżarnia. |
+
+## Jak działa algorytm ewolucyjny — trzy przykłady
+
+### OneMax (`/#/onemax`)
+
+Klasyczny **algorytm genetyczny** na łańcuchu 20 bitów. Fitness = liczba jedynek. Turniej k=3, krzyżowanie
+jednopunktowe, mutacja bit flip, elityzm 2. Cel dydaktyczny: populacja + selekcja + szum znajdują optimum,
+gdy krajobraz jest gładki.
+
+### Kolejność wizyt (`/#/trasa`)
+
+**TSP**: 7 obowiązkowych punktów, start i koniec w biurze. Genom = permutacja. Krzyżowanie OX, mutacja
+swap, elityzm. Baseline: zachłanny najbliższy sąsiad. Optimum: brute force 7! = 5040 — da się policzyć
+w przeglądarce i pokazać obok wyniku EA.
+
+### Dzień handlowca (`/#/handlowiec`)
+
+**Orienteering**: 11 sklepów, budżet 6 godzin, nie da się wszędzie. Genom = kolejność priorytetów, dekoder
+**pomija** punkt, który się nie mieści. Fitness = oczekiwane zł zamówień, nie kilometry. Pułapka: festiwal
+9800 zł / 70 min vs korytarz plażowy.
+
+Wszystkie trzy mają ziarno losowe w interfejsie — ten sam numer odtwarza ten sam przebieg.
 
 ## Czego tu nie ma — i co by się zmieniło
 
 | Zamiast | Kiedy warto | Co innego zobaczysz |
 |---|---|---|
-| **Wspinaczka / SA** na OneMax | Krajobraz bez oszustw (każda jedynka pomaga) | Hill-climb znajdzie 20/20 niemal tak samo szybko. GA jest tu nadmiarowy — i o to chodzi w przykładzie. |
-| **CMA-ES / ewolucja różnicowa** | Ciągłe wektory (ceny, budżety), nie permutacje | Inna reprezentacja. Na trasie sklepów nie pasują bez dekodera. |
-| **2-opt / 3-opt / Lin–Kernighan** na TSP | Trasa z obowiązkowymi punktami | Przy 7 stopach wynik ≈ GA i ≈ brute. Przy 20+ stopach lokalne przeszukiwanie zwykle bije naiwnego GA i jest szybsze. |
-| **Dokładny solver (MILP, OR-Tools)** | 7–12 punktów, twarde okna czasu, pojemność auta | Dostajesz optimum albo dowód, że go nie ma. Przy 11 sklepach z pomijaniem (handlowiec) przestrzeń eksploduje — wtedy heurystyka. |
-| **Programowanie dynamiczne / knapsack** | Dzień handlowca bez geografii | Weźmiesz najdroższe kontrakty w budżecie minut i **pominiesz korytarz** (plaża). Geografii nie ma w plecaku. |
-| **NSGA-II** | Dwa cele naraz: marża i litry, albo zł i godziny | Front Pareta zamiast jednej liczby. U nas fitness jest skalarny. |
-| **GA / MILP na kalendarzu promo** | Szukasz tygodnia × linia × mechanika, nie 6 presetów | Presety pokazują *intuicję*. Optymalizator znajdzie dziwny mix (np. Flirt co drugi tydzień, Euforia tylko w ciszy), który może wygrać marżą i zepsuć drabinę cen — trzeba dodać twarde ograniczenia (max głębokość Euforii, zakaz Retro+Pycha). |
+| **Wspinaczka / SA** na OneMax | Krajobraz bez oszustw | Hill-climb znajdzie 20/20 niemal tak samo szybko. GA jest tu nadmiarowy — i o to chodzi. |
+| **CMA-ES / ewolucja różnicowa** | Ciągłe wektory (ceny, budżety), nie permutacje | Inna reprezentacja. Pozwoliłaby optymalizować samą głębokość rabatu, a nie wybór z 9 mechanik. |
+| **2-opt / Lin–Kernighan** na TSP | Trasa z obowiązkowymi punktami | Przy 7 stopach ≈ GA i ≈ brute. Przy 20+ lokalne przeszukiwanie zwykle bije naiwnego GA. |
+| **Held–Karp** na dniu handlowca | 11 punktów z pomijaniem | 2¹¹ × 11 stanów — da się policzyć dokładnie i pokazać optimum obok wyniku EA, tak jak na trasie. |
+| **MILP / OR-Tools** na kalendarzu promo | Reguły dają się zapisać liniowo | Optimum albo dowód, że go nie ma. Kanibalizacja i zmęczenie są nieliniowe — trzeba by je linearyzować. |
+| **NSGA-II** | Dwa cele naraz: marża i litry | Front Pareta zamiast jednej liczby. Dziś jest cel skalarny z twardymi progami — prostszy do obrony przed kupcem. |
 
-**Skrót:** OneMax uczy mechaniki GA. 7 wizyt pokazuje, że zachłanność kłamie, a optimum da się sprawdzić. Dzień handlowca pokazuje, że fitness musi być celem biznesowym (zł, nie km). Kalendarz lodów pokazuje *model decyzji* — rotacja, drabina zł/L, limit — zanim w ogóle puścisz ewolucję.
+**Skrót:** OneMax uczy mechaniki GA. Siedem wizyt pokazuje, że zachłanność kłamie, a optimum da się
+sprawdzić. Dzień handlowca pokazuje, że fitness musi być celem biznesowym. Doradca pilnuje, żeby parametry
+pochodziły z danych, a nie z przeczucia. Optymalizator szuka kalendarza, którego nie da się wyklikać —
+i mówi wprost, kiedy najlepszym planem jest brak promocji.
