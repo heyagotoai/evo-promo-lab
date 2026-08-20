@@ -17,9 +17,12 @@ HashRouter: `/#/doradca` · `/#/plan` · `/#/linie` · `/#/handlowiec` · `/#/tr
 ```bash
 npm install
 npm run dev        # aplikacja
-npm test           # 70 testów modelu, optymalizatora i doradcy
+npm test           # 104 testy modelu, optymalizatora, doradcy, odporności i eksportu
 npm run typecheck  # tsc --noEmit
 ```
+
+Każdy push do `main` i każdy pull request przechodzi ten sam zestaw w GitHub Actions
+(`.github/workflows/ci.yml`): `npm ci` → typy → testy → build produkcyjny.
 
 ## Ścieżka robocza
 
@@ -76,6 +79,12 @@ nigdy nie dokłada, więc z optymalizatora nie wychodzi plan łamiący którąko
 Audyt planu rozdziela **reguły** (nigdy nie złamane) od **skutków** (przycięcia limitem, tygodnie na
 minusie) — skutek to nie zasada, tylko rzecz do zobaczenia przed wysłaniem gazetki.
 
+**Eksport.** Znaleziony plan wychodzi z przeglądarki dwoma drogami: „Kopiuj plan do arkusza" (TSV,
+wkleja się wprost do Excela i Arkuszy) oraz „Pobierz CSV" (średnik, przecinek dziesiętny i BOM, żeby
+polski Excel nie zjadł ogonków). Raport nie jest samą tabelką tygodni — niesie parametry **razem z ich
+źródłem**, cennik, efektywne zł/L, podsumowanie wobec dzisiejszego planu, listę reguł z dowodem i wynik
+testu odporności. Tyle, żeby wkleić do decka bez dopisywania przypisów.
+
 Optymalizator mówi wprost, gdy:
 
 - **najlepszym planem jest brak promocji** — przy Waszych cenach i elastyczności każda mechanika oddaje
@@ -85,11 +94,36 @@ Optymalizator mówi wprost, gdy:
 - **limit łańcucha jest wyczerpany samą sprzedażą regularną** — w upale sufit potrafi zniknąć zanim
   ktokolwiek wydrukuje gazetkę.
 
+### Odporność na niepewność parametrów
+
+Plan jest optymalny dla **jednego** zestawu parametrów, a Doradca sam przyznaje, które z nich są
+DOMYŚLNE. Test odporności zadaje inne pytanie niż optymalizator: czy przewaga nad dzisiejszym planem
+przeżywa niepewność danych, na których stanęła.
+
+Znaleziony plan i punkt odniesienia idą przez 200 zaburzonych scenariuszy rynku. Zasada, która czyni to
+uczciwym: **parametry zmierzone zaburzamy wąsko (±15%), zadeklarowane ±10%, a domyślne szeroko (±40%)** —
+niepewność danych wchodzi wtedy do wyniku, zamiast wisieć w przypisie. To nie jest ponowna optymalizacja:
+plan się nie zmienia, zmienia się rynek.
+
+Wynik to cztery liczby i jedna tabela:
+
+- w ilu scenariuszach plan bije dzisiejszy,
+- w ilu spełnia twarde progi briefu — **obok ta sama wartość dla dzisiejszego planu**, bo w słabszym
+  rynku progu bezwzględnego potrafi nie dowieźć nikt i bez tego porównania wskaźnik wprowadza w błąd,
+- mediana i 5. percentyl przewagi (czyli jak wygląda zły, ale nie skrajny rok),
+- **„co zmierzyć najpierw"** — ranking parametrów po tym, jak mocno ruszają przewagą na własnym paśmie.
+  Góra tej tabeli to pomiar, którego brak kosztuje najwięcej; łączy się wprost z listą braków w Doradcy.
+
 ### 3. Presety rotacji (`/#/linie`)
 
 Sześć gotowych rotacji na tym samym modelu (chroń premium, 1 po 1, Flirt+Euforia, Retro+Pycha, tylko Flirt,
 wszystkie naraz). Punkt odniesienia dla optymalizatora i intuicja: kanibalizacja, drabina zł/L, limit
 łańcucha, zmęczenie fali, dołek spiżarni.
+
+Strona czyta scenariusz zapisany w Doradcy — jeden przycisk podstawia ceny, koszty i parametry rynku,
+żeby presety i optymalizator pokazywały te same liczby o tej samej firmie. Wartość zmierzona, która nie
+trafia w gotowe pasmo modelowe, dokłada się jako osobna pozycja listy z etykietą „z Doradcy" — zamiast
+być po cichu zaokrąglona do najbliższego presetu.
 
 Ceny regularne i koszt wytworzenia są edytowalne. Kartony: Euforia 6, Retro 6, Pycha 4, Flirt 8 szt.
 

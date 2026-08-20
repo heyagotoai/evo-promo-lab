@@ -48,6 +48,8 @@ import {
   type OptState,
 } from "../lib/optimize";
 import { advise } from "../lib/advisor";
+import { knobsFor, stressTest, stressVerdict } from "../lib/robust";
+import { copyTSV, downloadCSV, planReport, reportFilename } from "../lib/exportPlan";
 import { loadScenario, savedAtLabel, type StoredScenario } from "../lib/scenario";
 
 const OBJECTIVE_LABEL: Record<Objective, string> = {
@@ -171,6 +173,7 @@ export function OptimizerPage() {
   );
 
   const [state, setState] = useState<OptState | null>(null);
+  const [copied, setCopied] = useState(false);
   // Każda zmiana reguł, celu albo składu linii unieważnia poprzedni przebieg —
   // inaczej na ekranie zostałby plan policzony pod inne zasady.
   useEffect(() => setState(null), [ctx]);
@@ -202,6 +205,55 @@ export function OptimizerPage() {
     );
     return params.capMode === "liters" ? quiet[0].liters : quiet[0].cartons;
   }, [current, params, lines]);
+
+  // Odporność: ten sam plan i ten sam punkt odniesienia przepuszczone przez
+  // siatkę zaburzeń parametrów. Nie szukamy planu na nowo — sprawdzamy,
+  // czy znaleziony przeżywa niepewność danych, na których stanął.
+  const knobs = useMemo(() => knobsFor(lines, advice?.readings ?? null), [lines, advice]);
+  const stress = useMemo(() => {
+    if (!best) return null;
+    return stressTest({
+      plan: best,
+      reference: baseline.plan,
+      lines,
+      params,
+      goal,
+      knobs,
+      n: 200,
+      seed: num(seed, 42) >>> 0,
+    });
+  }, [best, baseline, lines, params, goal, knobs, seed]);
+  const verdict = stress ? stressVerdict(stress) : null;
+
+  const spread = useMemo(() => {
+    if (!stress) return [];
+    const sorted = [...stress.deltas].sort((a, b) => a - b);
+    return Array.from({ length: 41 }, (_, i) => {
+      const q = i / 40;
+      return sorted[Math.min(sorted.length - 1, Math.floor(q * (sorted.length - 1)))];
+    });
+  }, [stress]);
+
+  const report = () =>
+    best && ev
+      ? planReport({
+          now: new Date(),
+          plan: best,
+          rows: ev.rows,
+          tot: ev.tot,
+          lines,
+          params,
+          goal,
+          seed: num(seed, 42) >>> 0,
+          generations: state?.gen ?? 0,
+          baselineLabel: baseline.label,
+          baselineTot: baseline.tot,
+          checks,
+          readings: advice?.readings ?? null,
+          confidence: advice?.confidence ?? null,
+          stress,
+        })
+      : null;
 
   const deltaMargin = ev ? ev.tot.margin - baseline.tot.margin : 0;
   const deltaLiters = ev ? ev.tot.liters - baseline.tot.liters : 0;
@@ -436,6 +488,32 @@ export function OptimizerPage() {
             />
           </div>
 
+          <div className="row">
+            <Button
+              variant="primary"
+              onClick={async () => {
+                const r = report();
+                if (!r) return;
+                setCopied(await copyTSV(r));
+              }}
+            >
+              Kopiuj plan do arkusza
+            </Button>
+            <Button
+              onClick={() => {
+                const r = report();
+                if (r) downloadCSV(r, reportFilename(new Date()));
+              }}
+            >
+              Pobierz CSV
+            </Button>
+            <span className="small">
+              {copied
+                ? "Skopiowane — wklej do Excela albo Arkuszy, kolumny same się rozłożą."
+                : "Raport niesie kalendarz, parametry ze źródłem, podsumowanie, listę reguł i wynik testu odporności."}
+            </span>
+          </div>
+
           {!ev.feasible ? (
             <Callout tone="bad" title="Tego briefu nie da się spełnić naraz">
               Optymalizator przeszukał przestrzeń i nie znalazł planu, który spełnia wszystkie warunki —
@@ -509,6 +587,84 @@ export function OptimizerPage() {
               c.detail,
             ])}
           />
+
+          {stress && verdict ? (
+            <>
+              <h2>Odporność na niepewność parametrów</h2>
+              <p className="small">
+                Ten sam plan i ten sam punkt odniesienia przepuszczone przez {stress.n} scenariuszy rynku.
+                Parametry, których nikt nie zmierzył, są zaburzane szeroko (±40%), zmierzone wąsko (±15%) —
+                więc niepewność danych wchodzi do wyniku, zamiast wisieć w przypisie. To nie jest ponowna
+                optymalizacja: sprawdzamy, czy znaleziony plan broni się bez strojenia pod scenariusz.
+              </p>
+              <p className="small">
+                Dwa wskaźniki mówią o czym innym i mogą się rozjeżdżać. „Bije dzisiejszy" porównuje oba
+                plany w tym samym rynku. „Brief spełniony" sprawdza próg podany w liczbach bezwzględnych —
+                w słabszym rynku potrafi go nie dowieźć nikt, dlatego obok podana jest ta sama wartość dla
+                dzisiejszego planu. Jeśli oba są niskie, problem jest w rynku albo w progu, nie w planie.
+              </p>
+              <Callout tone={verdict.tone} title="Werdykt">
+                {verdict.text}
+              </Callout>
+              <div className="row">
+                <Stat
+                  value={`${Math.round(stress.winRate * 100)}%`}
+                  label="Scenariuszy, w których plan bije dzisiejszy"
+                  tone={stress.winRate >= 0.95 ? "ok" : stress.winRate >= 0.8 ? "warn" : "bad"}
+                />
+                <Stat
+                  value={`${Math.round(stress.feasibleRate * 100)}%`}
+                  label={`Brief spełniony (dzisiejszy plan: ${Math.round(stress.refFeasibleRate * 100)}%)`}
+                  tone={stress.feasibleRate >= stress.refFeasibleRate ? "ok" : "warn"}
+                />
+                <Stat value={pln(stress.medianDelta)} label="Przewaga — mediana" />
+                <Stat
+                  value={pln(stress.p05Delta)}
+                  label="Przewaga — najgorsze 5%"
+                  tone={stress.p05Delta > 0 ? "ok" : "bad"}
+                />
+                <Stat value={pln(stress.worstDelta)} label="Przewaga — najgorszy przypadek" />
+              </div>
+              <div className="grid grid-2">
+                <div>
+                  <h2>Rozkład przewagi</h2>
+                  <p className="small">
+                    Oś Y: przewaga nad dzisiejszym planem (zł) · oś X: percentyl scenariuszy · kreska = zero
+                  </p>
+                  <LineChart
+                    categories={spread.map((_, i) => String(i * 2.5))}
+                    series={[{ name: "Przewaga", data: spread.map((v) => Math.round(v)), color: chartGreen }]}
+                    suffix=" zł"
+                    reference={{ value: 0, label: "próg opłacalności zmiany" }}
+                  />
+                </div>
+                <div>
+                  <h2>Co zmierzyć najpierw</h2>
+                  <p className="small">
+                    Który parametr najmocniej rusza przewagą, gdy przesunąć go po własnym paśmie niepewności.
+                    Góra tabeli to pomiar, którego brak kosztuje najwięcej.
+                  </p>
+                  <Table
+                    headers={["Parametr", "Pasmo", "Źródło", "Wpływ na przewagę"]}
+                    align={["l", "r", "l", "r"]}
+                    tones={stress.sensitivity.map((r) =>
+                      r.evidence === "measured" ? "ok" : r.evidence === "declared" ? "info" : "warn",
+                    )}
+                    rows={stress.sensitivity.map((r) => [
+                      r.label,
+                      `±${Math.round(r.band * 100)}%`,
+                      r.evidence === "measured"
+                        ? "zmierzone"
+                        : r.evidence === "declared"
+                          ? "zadeklarowane"
+                          : "DOMYŚLNE",
+                      pln(r.swing),
+                    ])}
+                  />
+                </div>
+              </div>
+            </>
+          ) : null}
 
           <div className="grid grid-2">
             <div>
