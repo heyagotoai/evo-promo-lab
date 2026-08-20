@@ -55,6 +55,8 @@ export type Goal = {
   minLiters: number;
   minWeekMargin: number;
   minFullPriceEuforia: number;
+  /** Żaden tydzień nie może przekroczyć limitu łańcucha — nadwyżka i tak nie dojedzie. */
+  noCapOverflow: boolean;
 };
 
 export const DEFAULT_GUARDS: Guards = {
@@ -76,6 +78,7 @@ export const DEFAULT_GOAL: Goal = {
   minLiters: 0,
   minWeekMargin: 0,
   minFullPriceEuforia: 0,
+  noCapOverflow: false,
 };
 
 export const NO_MECHS: Mechs = { euforia: "none", retro: "none", pycha: "none", flirt: "none" };
@@ -255,6 +258,7 @@ export type Eval = {
   tot: Totals;
   rows: WeekRow[];
   worstWeek: number;
+  cappedWeeks: number;
 };
 
 function primaryOf(t: Totals, o: Objective): number {
@@ -279,6 +283,8 @@ export function evaluate(
     const scale = Math.max(1, Math.abs(goal.minWeekMargin), Math.abs(tot.margin) / WEEKS);
     violation += (goal.minWeekMargin - worstWeek) / scale;
   }
+  const cappedWeeks = rows.filter((r) => r.capped).length;
+  if (goal.noCapOverflow && cappedWeeks > 0) violation += cappedWeeks / WEEKS;
   return {
     feasible: violation <= 1e-9,
     violation,
@@ -286,6 +292,7 @@ export function evaluate(
     tot,
     rows,
     worstWeek,
+    cappedWeeks,
   };
 }
 
@@ -446,7 +453,12 @@ export function runOptimizer(state: OptState, ctx: OptCtx, generations: number):
 
 /* ---------------------------------------------------------------- audyt planu */
 
-export type Check = { rule: string; ok: boolean; detail: string };
+/**
+ * "rule" to zasada, której optymalizator nigdy nie złamie — naprawa jej pilnuje.
+ * "outcome" to skutek, który z planu wychodzi i który trzeba zobaczyć, ale
+ * którego sama naprawa nie usunie (limit łańcucha, tygodnie na minusie).
+ */
+export type Check = { rule: string; ok: boolean; detail: string; kind: "rule" | "outcome" };
 
 /** Lista kontrolna: co plan musiał spełnić, żeby w ogóle wyjść z optymalizatora. */
 export function auditPlan(plan: Plan, lines: Line[], g: Guards, p: SimParams, ev: Eval): Check[] {
@@ -468,6 +480,7 @@ export function auditPlan(plan: Plan, lines: Line[], g: Guards, p: SimParams, ev
   }
   checks.push({
     rule: `Fala nie dłuższa niż ${g.maxBurst} tyg.`,
+    kind: "rule",
     ok: burstOk,
     detail: bursts.length ? `najdłuższe fale: ${bursts.join(", ")}` : "żadna linia nie wchodzi do gazetki",
   });
@@ -484,6 +497,7 @@ export function auditPlan(plan: Plan, lines: Line[], g: Guards, p: SimParams, ev
   }
   checks.push({
     rule: g.forbidPairs.map(([a, b]) => `${name(a)} i ${name(b)} osobno`).join("; ") || "brak par zakazanych",
+    kind: "rule",
     ok: pairOk,
     detail: pairOk ? "nigdy nie stoją w tym samym tygodniu" : `kolizje: ${clashes.join(", ")}`,
   });
@@ -491,6 +505,7 @@ export function auditPlan(plan: Plan, lines: Line[], g: Guards, p: SimParams, ev
   const weekCounts = plan.map((w) => ids.filter((id) => isOn(w[id])).length);
   checks.push({
     rule: `Najwyżej ${g.maxLinesPerWeek} linie naraz`,
+    kind: "rule",
     ok: Math.max(0, ...weekCounts) <= g.maxLinesPerWeek,
     detail: `maksimum w planie: ${Math.max(0, ...weekCounts)}`,
   });
@@ -498,6 +513,7 @@ export function auditPlan(plan: Plan, lines: Line[], g: Guards, p: SimParams, ev
   const silent = weekCounts.filter((c) => c === 0).length;
   checks.push({
     rule: `Co najmniej ${g.minSilentWeeks} tyg. bez gazetki`,
+    kind: "rule",
     ok: silent >= g.minSilentWeeks,
     detail: `${silent} tyg. ciszy`,
   });
@@ -508,6 +524,7 @@ export function auditPlan(plan: Plan, lines: Line[], g: Guards, p: SimParams, ev
   });
   checks.push({
     rule: "Budżet tygodni promocyjnych na linię",
+    kind: "rule",
     ok: budgets.every((b) => b.ok),
     detail: budgets.map((b) => `${name(b.id)} ${b.n}/${g.maxPromoWeeks[b.id]}`).join(", "),
   });
@@ -525,6 +542,7 @@ export function auditPlan(plan: Plan, lines: Line[], g: Guards, p: SimParams, ev
     }
     checks.push({
       rule: g.ladder === "strict" ? "Premium nie wchodzi w średnią półkę" : "Premium nie schodzi pod najtańszą linię",
+      kind: "rule",
       ok,
       detail: worst.join("; ") || "brak linii-kotwicy",
     });
@@ -533,6 +551,7 @@ export function auditPlan(plan: Plan, lines: Line[], g: Guards, p: SimParams, ev
   const cappedWeeks = ev.rows.filter((r) => r.capped).map((r) => r.week);
   checks.push({
     rule: `Limit łańcucha ${p.cap} ${p.capMode === "liters" ? "L" : "kart."} / tydz.`,
+    kind: "outcome",
     ok: cappedWeeks.length === 0,
     detail: cappedWeeks.length
       ? `przycięte tygodnie: ${cappedWeeks.join(", ")} — łańcuch tyle nie przyjmie, sprzedaż wyparuje`
@@ -542,6 +561,7 @@ export function auditPlan(plan: Plan, lines: Line[], g: Guards, p: SimParams, ev
   const negative = ev.rows.filter((r) => r.margin < 0).map((r) => r.week);
   checks.push({
     rule: "Żaden tydzień nie schodzi pod zero",
+    kind: "outcome",
     ok: negative.length === 0,
     detail: negative.length ? `stratne tygodnie: ${negative.join(", ")}` : `najsłabszy tydzień: ${Math.round(ev.worstWeek)} zł`,
   });

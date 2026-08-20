@@ -114,9 +114,7 @@ describe("naprawa planu", () => {
       for (let seed = 1; seed <= 40; seed++) {
         const plan = repair(randomPlan(seed), ctx.lines, g, ctx.allowed);
         const ev = evaluate(plan, ctx.lines, P, DEFAULT_GOAL);
-        const checks = auditPlan(plan, ctx.lines, g, P, ev).filter(
-          (c) => !c.rule.startsWith("Limit łańcucha") && !c.rule.startsWith("Żaden tydzień"),
-        );
+        const checks = auditPlan(plan, ctx.lines, g, P, ev).filter((c) => c.kind === "rule");
         for (const c of checks) expect(`${c.rule}: ${c.detail}`).toBe(c.ok ? `${c.rule}: ${c.detail}` : "OK");
       }
     }
@@ -245,10 +243,22 @@ describe("algorytm ewolucyjny", () => {
     const g: Guards = { ...DEFAULT_GUARDS, maxBurst: 2, minGap: 2, maxLinesPerWeek: 1, minSilentWeeks: 3 };
     const ctx = ctxOf(g);
     const s = runOptimizer(initOptimizer(ctx, 21, presetSeeds()), ctx, 40);
-    const checks = auditPlan(s.best, ctx.lines, g, P, s.bestEval).filter(
-      (c) => !c.rule.startsWith("Limit łańcucha") && !c.rule.startsWith("Żaden tydzień"),
-    );
+    const checks = auditPlan(s.best, ctx.lines, g, P, s.bestEval).filter((c) => c.kind === "rule");
     for (const c of checks) expect(`${c.rule} → ${c.detail}`).toBe(c.ok ? `${c.rule} → ${c.detail}` : "ZŁAMANA");
+  });
+
+  it("umie znaleźć plan, który ani razu nie przebija limitu łańcucha", () => {
+    // Upał podnosi bazę do ~7,8 tys. L, więc każda akcja przebija sufit 9 tys. L.
+    const params = { ...P, season: 1.4, cap: 9000 };
+    const goal = { ...DEFAULT_GOAL, objective: "liters" as const };
+    const base = { ...ctxOf(), params, goal };
+    const loose = runOptimizer(initOptimizer(base, 17, presetSeeds()), base, 40);
+    expect(loose.bestEval.cappedWeeks).toBeGreaterThan(0);
+    const tight = { ...base, goal: { ...goal, noCapOverflow: true } };
+    const s = runOptimizer(initOptimizer(tight, 17, presetSeeds()), tight, 60);
+    expect(s.bestEval.feasible).toBe(true);
+    expect(s.bestEval.cappedWeeks).toBe(0);
+    expect(s.bestEval.rows.every((r) => !r.capped)).toBe(true);
   });
 
   it("umie szukać litrów przy twardym progu marży", () => {
